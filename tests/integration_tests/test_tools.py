@@ -67,3 +67,43 @@ class TestOctenSearchResultsIntegration:
         results = tool.invoke({"query": "artificial intelligence news"})
         assert isinstance(results, list)
         assert len(results) <= 2
+
+    def test_search_with_time_filter(self) -> None:
+        tool = OctenSearchResults(
+            max_results=3,
+            time_basis="published",
+            start_time="2025-01-01",
+            end_time="2026-03-30",
+        )
+        results = tool.invoke({"query": "Python release"})
+        assert isinstance(results, list)
+        assert len(results) > 0
+
+    def test_search_with_highlight(self) -> None:
+        tool = OctenSearchResults(
+            max_results=3,
+            highlight_enabled=True,
+            highlight_max_tokens=100,
+        )
+        results = tool.invoke({"query": "machine learning tutorial"})
+        assert isinstance(results, list)
+        assert len(results) > 0
+
+    def test_search_with_full_content(self) -> None:
+        tool = OctenSearchResults(
+            max_results=2,
+            full_content_enabled=True,
+            full_content_max_tokens=500,
+        )
+        results = tool.invoke({"query": "Python documentation"})
+        assert isinstance(results, list)
+        assert len(results) > 0
+
+    def test_invalid_api_key_returns_error(self) -> None:
+        from pydantic import SecretStr
+
+        tool = OctenSearchResults(octen_api_key=SecretStr("invalid-key-12345"))
+        results = tool.invoke({"query": "test"})
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert "error" in results[0]

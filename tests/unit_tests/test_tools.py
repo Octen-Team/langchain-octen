@@ -135,6 +135,95 @@ class TestOctenSearchAPIWrapper:
         kwargs = wrapper._build_search_kwargs("test", include_domains=["override.com"])
         assert kwargs["include_domains"] == ["override.com"]
 
+    def test_build_search_kwargs_text_filters(self) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY),
+            include_text=["python"],
+            exclude_text=["java"],
+        )
+        kwargs = wrapper._build_search_kwargs("test")
+        assert kwargs["include_text"] == ["python"]
+        assert kwargs["exclude_text"] == ["java"]
+
+    def test_build_search_kwargs_time_filters(self) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY),
+            time_basis="published",
+            start_time="2024-01-01",
+            end_time="2024-12-31",
+        )
+        kwargs = wrapper._build_search_kwargs("test")
+        assert kwargs["time_basis"] == "published"
+        assert kwargs["start_time"] == "2024-01-01"
+        assert kwargs["end_time"] == "2024-12-31"
+
+    @patch("octen.models.search.HighlightOptions")
+    def test_build_search_kwargs_highlight_options(
+        self, mock_highlight_cls: MagicMock
+    ) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY),
+            highlight_enabled=True,
+            highlight_max_tokens=200,
+        )
+        kwargs = wrapper._build_search_kwargs("test")
+        mock_highlight_cls.assert_called_once_with(enable=True, max_tokens=200)
+        assert "highlight" in kwargs
+
+    @patch("octen.models.search.FullContentOptions")
+    def test_build_search_kwargs_full_content_options(
+        self, mock_fc_cls: MagicMock
+    ) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY),
+            full_content_enabled=True,
+            full_content_max_tokens=500,
+        )
+        kwargs = wrapper._build_search_kwargs("test")
+        mock_fc_cls.assert_called_once_with(enable=True, max_tokens=500)
+        assert "full_content" in kwargs
+
+    def test_build_search_kwargs_timeout(self) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY),
+            timeout=30.0,
+        )
+        kwargs = wrapper._build_search_kwargs("test")
+        assert kwargs["timeout"] == 30.0
+
+    def test_format_results_empty_list(self) -> None:
+        assert OctenSearchAPIWrapper._format_results([]) == []
+
+    def test_format_results_no_none_values(self) -> None:
+        raw = [{"title": "A", "url": "https://a.com", "highlight": "text"}]
+        cleaned = OctenSearchAPIWrapper._format_results(raw)
+        assert cleaned == [{"title": "A", "url": "https://a.com", "highlight": "text"}]
+
+    @patch("octen.Octen")
+    def test_results_closes_client_on_error(self, mock_octen_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.side_effect = RuntimeError("boom")
+
+        wrapper = OctenSearchAPIWrapper(octen_api_key=SecretStr(FAKE_API_KEY))
+        with pytest.raises(RuntimeError, match="boom"):
+            wrapper.results("test")
+        mock_client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_results_async_closes_client_on_error(
+        self, mock_async_cls: MagicMock
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.side_effect = RuntimeError("boom")
+
+        wrapper = OctenSearchAPIWrapper(octen_api_key=SecretStr(FAKE_API_KEY))
+        with pytest.raises(RuntimeError, match="boom"):
+            await wrapper.results_async("test")
+        mock_client.close.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # OctenSearchResults (BaseTool) tests
@@ -208,3 +297,54 @@ class TestOctenSearchResults:
         assert tool.api_wrapper.max_results == 10
         assert tool.api_wrapper.search_type == "keyword"
         assert tool.api_wrapper.safesearch == "off"
+
+    @patch("octen.Octen")
+    def test_run_with_domain_filters(self, mock_octen_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        tool._run("test", include_domains=["example.com"], exclude_domains=["bad.com"])
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert call_kwargs["include_domains"] == ["example.com"]
+        assert call_kwargs["exclude_domains"] == ["bad.com"]
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_arun_empty_results_raises(self, mock_async_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response([])
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        with pytest.raises(ToolException, match="No results found"):
+            await tool._arun("xyznonexistent12345")
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_arun_sdk_error_returns_error_dict(
+        self, mock_async_cls: MagicMock
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.side_effect = RuntimeError("API down")
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        results = await tool._arun("test")
+        assert len(results) == 1
+        assert "error" in results[0]
+        assert "API down" in results[0]["error"]
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_arun_with_domain_filters(self, mock_async_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        await tool._arun(
+            "test", include_domains=["example.com"], exclude_domains=["bad.com"]
+        )
