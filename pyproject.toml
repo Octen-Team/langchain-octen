@@ -9,7 +9,7 @@ description = "LangChain integration for Octen Web Search"
 authors = ["Octen Team <support@octen.ai>"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/octen-ai/langchain-octen"
+repository = "https://github.com/Octen-Team/langchain-octen"
 keywords = ["langchain", "octen", "search", "web-search", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
