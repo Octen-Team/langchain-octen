@@ -43,9 +43,16 @@ for r in results:
 ### With Domain Filtering
 
 ```python
+# Only include results from specific domains
 results = tool.invoke({
     "query": "machine learning",
     "include_domains": ["arxiv.org", "papers.nips.cc"],
+})
+
+# Exclude results from specific domains
+results = tool.invoke({
+    "query": "Python tutorial",
+    "exclude_domains": ["youtube.com", "reddit.com"],
 })
 ```
 
@@ -75,6 +82,37 @@ async def main():
 asyncio.run(main())
 ```
 
+### Advanced Options
+
+```python
+from langchain_octen import OctenSearchResults
+
+# Time-filtered search
+tool = OctenSearchResults(
+    max_results=5,
+    time_basis="published",
+    start_time="2025-01-01",
+    end_time="2026-03-30",
+)
+results = tool.invoke({"query": "Python release notes"})
+
+# Search with highlighted snippets
+tool = OctenSearchResults(
+    max_results=5,
+    highlight_enabled=True,
+    highlight_max_tokens=200,
+)
+results = tool.invoke({"query": "LangChain tutorial"})
+
+# Search with full page content
+tool = OctenSearchResults(
+    max_results=3,
+    full_content_enabled=True,
+    full_content_max_tokens=1000,
+)
+results = tool.invoke({"query": "Python documentation"})
+```
+
 ## Configuration
 
 | Parameter | Type | Default | Description |
@@ -96,6 +134,27 @@ asyncio.run(main())
 | `full_content_enabled` | `bool` | `None` | Return full page content |
 | `full_content_max_tokens` | `int` | `None` | Max tokens for full content |
 | `timeout` | `float` | `None` | Request timeout in seconds |
+
+## Development
+
+```bash
+# Install dependencies
+poetry install --with test,dev
+
+# Run unit tests (no API key needed)
+make test
+
+# Run integration tests (requires OCTEN_API_KEY)
+export OCTEN_API_KEY="your-api-key"
+make integration_tests
+
+# Run all tests with coverage
+poetry run pytest tests/ --cov=langchain_octen --cov-report=term-missing
+
+# Lint and format
+make lint
+make format
+```
 
 ## License
 
