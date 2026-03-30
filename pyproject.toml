@@ -1,0 +1,65 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "langchain-octen"
+version = "0.1.0"
+description = "LangChain integration for Octen Web Search"
+authors = ["Octen Team <support@octen.ai>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/octen-ai/langchain-octen"
+keywords = ["langchain", "octen", "search", "web-search", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+packages = [{ include = "langchain_octen" }]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+langchain-core = ">=0.3.15,<2.0.0"
+octen = ">=0.2.0,<1.0.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = ">=7.4,<9"
+pytest-asyncio = ">=0.23,<1"
+pytest-socket = ">=0.7,<1"
+
+[tool.poetry.group.dev.dependencies]
+ruff = ">=0.5,<1"
+mypy = ">=1.10,<2"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["octen", "octen.*"]
+ignore_missing_imports = true
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "langchain_octen._utilities"
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
