@@ -67,13 +67,16 @@ results = tool.invoke({
 
 ### In a LangChain Agent
 
+`create_agent` comes from the `langchain` package (1.0 or newer): `pip install langchain`.
+`llm` is any LangChain chat model, for example `ChatOpenAI(...)` from `langchain-openai`.
+
 ```python
+from langchain.agents import create_agent
 from langchain_octen import OctenSearchResults
-from langgraph.prebuilt import create_react_agent
 
 tool = OctenSearchResults(max_results=5)
-agent = create_react_agent(llm, [tool])
-response = agent.invoke({"messages": [("user", "What happened in AI today?")]})
+agent = create_agent(model=llm, tools=[tool])
+response = agent.invoke({"messages": [{"role": "user", "content": "What happened in AI today?"}]})
 ```
 
 ### Async Support
@@ -173,14 +176,14 @@ from langchain_octen import (
     OctenPlaceSearch,
     OctenPulseSearch,
 )
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 tools = [
     OctenNewsSearch(count=5),
     OctenBusinessSearch(entities={"count": 2}),
     OctenPlaceSearch(places={"count": 5}),
 ]
-agent = create_react_agent(llm, tools)
+agent = create_agent(model=llm, tools=tools)
 ```
 
 ### Broad Search (`OctenBroadSearch`)
