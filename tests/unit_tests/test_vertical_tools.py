@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import logging
 from dataclasses import dataclass
@@ -629,3 +630,86 @@ def test_unknown_model_arg_goes_to_model(
     assert isinstance(result, str)
     assert bad_name in result
     sync_client.assert_not_called()
+
+
+MAY_HAVE_BEEN_SENT = "may already have reached the server"
+SENT_OR_UNKNOWN = [
+    OctenTimeoutError(timeout=30.0, request_sent=True),
+    OctenTimeoutError(timeout=30.0, request_sent=None),
+    OctenConnectionError("connection reset", request_sent=True),
+    OctenConnectionError("connection reset", request_sent=None),
+]
+NOT_SENT = [
+    OctenTimeoutError("connect timeout", timeout=30.0, request_sent=False),
+    OctenConnectionError("connection refused", request_sent=False),
+]
+
+
+@pytest.mark.parametrize("exc", SENT_OR_UNKNOWN, ids=repr)
+def test_possibly_sent_failure_warns_against_retry(exc: Exception, sync_client: MagicMock) -> None:
+    case = CASES[1]
+    _sdk_method(sync_client.return_value, case).side_effect = exc
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert isinstance(result, str)
+    assert str(exc) in result
+    assert MAY_HAVE_BEEN_SENT in result
+    assert "billed" in result
+
+
+@pytest.mark.parametrize("exc", NOT_SENT, ids=repr)
+def test_unsent_failure_keeps_plain_message(exc: Exception, sync_client: MagicMock) -> None:
+    case = CASES[1]
+    _sdk_method(sync_client.return_value, case).side_effect = exc
+
+    assert _tool(case).invoke({"query": "q"}) == str(exc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", SENT_OR_UNKNOWN, ids=repr)
+async def test_possibly_sent_failure_warns_against_retry_async(
+    exc: Exception, async_client: MagicMock
+) -> None:
+    _sdk_method(async_client.return_value, PLACE).side_effect = exc
+
+    result = await _tool(PLACE).ainvoke({"query": "q"})
+
+    assert isinstance(result, str)
+    assert MAY_HAVE_BEEN_SENT in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", NOT_SENT, ids=repr)
+async def test_unsent_failure_keeps_plain_message_async(
+    exc: Exception, async_client: MagicMock
+) -> None:
+    _sdk_method(async_client.return_value, PLACE).side_effect = exc
+
+    assert await _tool(PLACE).ainvoke({"query": "q"}) == str(exc)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_developer_option_dicts_are_copied(case: Case, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).return_value = _response(case)
+    options = {
+        key: {"enable": True, "nested": {"max_tokens": 512}}
+        for key, value in case.options.items()
+        if isinstance(value, dict)
+    }
+    expected = copy.deepcopy(options)
+    with patch.object(case.tool_cls, "_build_request_model"):
+        tool = _tool(case, **options)
+
+    for value in options.values():
+        value["enable"] = False
+        value["nested"]["max_tokens"] = 1
+        value["added"] = "later"
+
+    for key, value in expected.items():
+        assert getattr(tool, key) == value
+    tool.invoke({"query": "q"})
+    _, kwargs = _sdk_method(client, case).call_args
+    for key, value in expected.items():
+        assert kwargs[key] == value

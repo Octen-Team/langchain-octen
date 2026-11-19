@@ -34,6 +34,12 @@ def async_client(api_key: SecretStr) -> octen.AsyncOcten:
     return octen.AsyncOcten(api_key=api_key.get_secret_value(), retry_after_send=False)
 
 
+MAY_HAVE_BEEN_SENT = (
+    "The request may already have reached the server and been billed, so do not retry it "
+    "automatically."
+)
+
+
 def classify(exc: Exception) -> Optional[str]:
     """Return the message to hand to the model, or ``None`` if ``exc`` must be raised.
 
@@ -43,7 +49,10 @@ def classify(exc: Exception) -> Optional[str]:
     unrecognised are raised so the developer sees them.
     """
     if isinstance(exc, (octen.OctenTimeoutError, octen.OctenConnectionError)):
-        return str(exc)
+        # request_sent is None when octen could not tell; treat that as possibly sent.
+        if getattr(exc, "request_sent", None) is False:
+            return str(exc)
+        return f"{exc}. {MAY_HAVE_BEEN_SENT}"
     if isinstance(exc, octen.OctenRateLimitError):
         return str(exc)
     if isinstance(exc, octen.OctenAPIError):

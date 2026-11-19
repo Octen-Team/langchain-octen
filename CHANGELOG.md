@@ -20,6 +20,12 @@
     400/408/422, 2xx responses with an error envelope or a malformed body, timeouts and
     connection errors are returned to the model. Invalid or unknown model arguments are
     rejected before any request is made.
+  - A timeout or connection error that may have happened after the request was sent is
+    reported to the model with a note that the call may already have been billed and should
+    not be retried automatically.
+  - Dict options (`highlight`, `full_content`, `subjects`, `entities`, `places`,
+    `web_search`) are deep-copied at construction; later changes to the caller's dicts have
+    no effect.
   - The tools also accept a plain string as input (`tool.invoke("coffee shops")`), used as
     the query.
 - CI on Python 3.9-3.13, LangChain standard tool tests, and opt-in live tests

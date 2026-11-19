@@ -151,7 +151,9 @@ results = tool.invoke({"query": "Python documentation"})
     positive finite number raises `ValueError` naming it.
   - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):
     rate limits (429), server errors (5xx), 400/408/422 responses, 2xx responses carrying an
-    error envelope or a malformed body, timeouts and connection errors.
+    error envelope or a malformed body, timeouts and connection errors. When a timeout or
+    connection error may have happened after the request was sent, the message also tells
+    the model the call may already have been billed and should not be retried automatically.
   - Invalid model arguments (an unknown `time_range`, a misspelt argument name such as
     `include_domain`, half a coordinate pair, a `radius` without a point, values out of
     range) are rejected before any request is made, and the

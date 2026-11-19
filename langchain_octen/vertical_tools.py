@@ -7,6 +7,7 @@ the tool is constructed.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
@@ -188,6 +189,21 @@ class _OctenVerticalTool(BaseTool):
     _sdk_method: ClassVar[Tuple[str, str]]
     _developer_options: ClassVar[Tuple[str, ...]]
     _request_model: ClassVar[Any]
+
+    @field_validator(
+        "highlight",
+        "full_content",
+        "subjects",
+        "entities",
+        "places",
+        "web_search",
+        mode="after",
+        check_fields=False,
+    )
+    @classmethod
+    def _copy_option(cls, value: Any) -> Any:
+        # Keep a private copy: later changes to the caller's nested dicts must not leak in.
+        return copy.deepcopy(value)
 
     @field_validator("timeout", mode="before")
     @classmethod
