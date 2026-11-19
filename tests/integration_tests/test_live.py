@@ -61,14 +61,17 @@ def test_broad_search() -> None:
     tool = OctenBroadSearch(count=1, max_queries=1)
     result = tool.invoke({"query": "compare open source vector databases"})
     _check(tool.name, result)
-    assert result["data"].get("search_results")
+    # data.search_results is one group per sub-query: {"query", "results", "latency"}.
+    groups = result["data"]["search_results"]
+    assert groups, result
+    assert any(group.get("results") for group in groups), groups
 
 
 def test_news_search() -> None:
     tool = OctenNewsSearch(count=1)
     result = tool.invoke({"query": "artificial intelligence regulation", "time_range": "month"})
     _check(tool.name, result)
-    assert result["data"].get("results")
+    assert result["data"]["results"], result
 
 
 @pytest.mark.asyncio
@@ -76,14 +79,14 @@ async def test_business_search_async() -> None:
     tool = OctenBusinessSearch(count=1)
     result = await tool.ainvoke({"query": "NVIDIA company overview"})
     _check(tool.name, result)
-    assert result["data"].get("results") or result["data"].get("entities")
+    assert result["data"].get("results") or result["data"].get("entities"), result
 
 
 def test_pulse_search() -> None:
     tool = OctenPulseSearch(count=1)
     result = tool.invoke({"query": "github docs"})
     _check(tool.name, result)
-    assert result["data"].get("results")
+    assert result["data"]["results"], result
 
 
 def test_place_search() -> None:
@@ -96,7 +99,11 @@ def test_place_search() -> None:
     }
     result = tool.invoke(args)
     _check(tool.name, result)
-    assert result["data"].get("places") or result.get("warning") == "places_unavailable"
+    if result.get("warning") == "places_unavailable":
+        pytest.skip("place engine did not answer in time (warning places_unavailable)")
+    places = result["data"]["places"]
+    assert places, result
+    assert all(place.get("name") for place in places), places
 
 
 def test_bad_key_raises_authentication_error() -> None:

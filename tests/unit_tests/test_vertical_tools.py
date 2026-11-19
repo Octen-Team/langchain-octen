@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type
@@ -520,3 +521,27 @@ def test_transient_error_is_not_logged(
         _tool(case).invoke({"query": "q"})
 
     assert not [r for r in caplog.records if r.name == "langchain_octen"]
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_forwarded_names_are_sdk_parameters(case: Case) -> None:
+    # No mocks: the names the tool forwards must exist on the real octen methods.
+    from octen.async_client import AsyncPlaceSearchResource, AsyncSearchResource
+    from octen.resources.place_search import PlaceSearchResource
+    from octen.resources.search import SearchResource
+
+    resource, method = case.sdk_path
+    sync_cls, async_cls = (
+        (PlaceSearchResource, AsyncPlaceSearchResource)
+        if resource == "place_search"
+        else (SearchResource, AsyncSearchResource)
+    )
+    tool = _tool(case)
+    forwarded = (
+        set(tool._developer_options)  # type: ignore[attr-defined]
+        | set(tool.args)
+        | {"timeout"}
+    )
+    for cls in (sync_cls, async_cls):
+        params = set(inspect.signature(getattr(cls, method)).parameters)
+        assert forwarded <= params, (cls.__name__, method, forwarded - params)
