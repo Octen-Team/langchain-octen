@@ -149,7 +149,8 @@ results = tool.invoke({"query": "Python documentation"})
   - Constructor options are checked when the tool is built: an out-of-range value
     (`count=1000`) or a misspelt option name (`max_querys=3`) raises `ValueError` naming it.
   - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):
-    rate limits (429), server errors (5xx), 400/422 responses, timeouts and connection errors.
+    rate limits (429), server errors (5xx), 400/408/422 responses, 2xx responses carrying an
+    error envelope or a malformed body, timeouts and connection errors.
   - Invalid model arguments (an unknown `time_range`, half a coordinate pair, a `radius`
     without a point, values out of range) are rejected before any request is made, and the
     model gets a message naming the argument.

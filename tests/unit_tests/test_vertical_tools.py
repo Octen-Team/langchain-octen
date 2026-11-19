@@ -248,6 +248,8 @@ TRANSIENT_ERRORS = [
     OctenAPIError("upstream unavailable", status_code=503),
     OctenAPIError("invalid language", status_code=400),
     OctenAPIError("unprocessable", status_code=422),
+    OctenAPIError("request timeout", status_code=408),
+    OctenAPIError("API returned code 500", status_code=200),
     OctenTimeoutError(timeout=30.0),
     OctenConnectionError(),
 ]

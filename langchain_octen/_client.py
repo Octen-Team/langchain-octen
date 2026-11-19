@@ -37,9 +37,10 @@ def async_client(api_key: SecretStr) -> octen.AsyncOcten:
 def classify(exc: Exception) -> Optional[str]:
     """Return the message to hand to the model, or ``None`` if ``exc`` must be raised.
 
-    Transient failures and server-side rejections of model-supplied values go to the
-    model; configuration problems (bad key, no access, invalid developer options)
-    and anything unrecognised are raised so the developer sees them.
+    Transient failures, server-side rejections of model-supplied values and 2xx
+    responses that carry an error envelope or a malformed body go to the model;
+    configuration problems (bad key, no access, invalid developer options) and anything
+    unrecognised are raised so the developer sees them.
     """
     if isinstance(exc, (octen.OctenTimeoutError, octen.OctenConnectionError)):
         return str(exc)
@@ -47,6 +48,8 @@ def classify(exc: Exception) -> Optional[str]:
         return str(exc)
     if isinstance(exc, octen.OctenAPIError):
         status = exc.status_code
-        if status is not None and (500 <= status <= 599 or status in (400, 422)):
+        if status is None:
+            return None
+        if 500 <= status <= 599 or 200 <= status <= 299 or status in (400, 408, 422):
             return str(exc)
     return None
