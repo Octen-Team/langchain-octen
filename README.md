@@ -127,9 +127,11 @@ results = tool.invoke({"query": "Python documentation"})
 `OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`, `OctenPulseSearch` and
 `OctenPlaceSearch` share one design:
 
-- **The model only controls the query and filters that do not change the cost of a call.**
-  Everything that decides how much is returned, and therefore billed, is set by you when
-  you construct the tool. Options you leave unset are not sent, so the server defaults apply.
+- **The model only controls the query and search filters; you control the billing-related
+  options and limits** (result counts, highlight / full content, Broad `max_queries`, ...)
+  when you construct the tool. Options you leave unset are not sent, so the server defaults
+  apply. Broad Search is billed per sub-query: `max_queries` is an upper bound, and how many
+  sub-queries a question actually produces depends on the query.
 - **Every call returns a dict:**
 
   ```python

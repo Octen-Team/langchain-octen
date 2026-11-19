@@ -7,11 +7,14 @@
 - Five vertical search tools: `OctenBroadSearch` (`octen_broad_search`), `OctenNewsSearch`
   (`octen_news_search`), `OctenBusinessSearch` (`octen_business_search`), `OctenPulseSearch`
   (`octen_pulse_search`) and `OctenPlaceSearch` (`octen_place_search`).
-  - The model only gets the query and filters that do not change the cost of a call
-    (`include_domains`, `exclude_domains`, `time_range`, `language`; Place: `latitude`,
-    `longitude`, `radius`, `user_location`). Result counts, highlight / full content, Broad
+  - The model only gets the query and search filters (`include_domains`, `exclude_domains`,
+    `time_range`, `language`; Place: `latitude`, `longitude`, `radius`, `user_location`).
+    Billing-related options and limits (result counts, highlight / full content, Broad
     `max_queries`, Pulse `mode`, News `subjects`, Business `entities`, Place `places` and
-    `web_search`, and `timeout` are constructor options.
+    `web_search`) and `timeout` are constructor options. Broad Search is billed per
+    sub-query; `max_queries` caps the number, and the actual count depends on the query.
+  - `response_format` must stay `"content"`; other values raise `ValueError` at
+    construction.
   - Each call returns `{"data", "request_id", "warning"}`; `warning` is omitted when empty.
   - Constructor options are validated when the tool is built: an out-of-range value, an
     unknown option name or a `timeout` that is not a positive finite number raises
@@ -50,11 +53,17 @@
   `FutureWarning` (shown by default, unlike `DeprecationWarning`); it will be removed in a
   future release.
 
-### Known inconsistency
+### Known issues
 
 - `octen_search` (`OctenSearchResults`) keeps its 0.1 behaviour: it returns a list of results
   and reports errors as `[{"error": ...}]`, unlike the new tools. Both will be unified in a
   future major release.
+- Building a vertical tool with `model_validate` instead of the constructor, with a
+  misspelt key argument, can still include the raw key in pydantic's structured error
+  (`errors()` / `json()`).
+- When octen retries a 502 or 504 internally and the final attempt fails differently (for
+  example with a 503), the "may already have been billed" note is not added, because the
+  tool only sees the final error.
 
 ## 0.1.1
 
