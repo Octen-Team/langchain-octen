@@ -176,7 +176,10 @@ class _OctenVerticalTool(BaseTool):
     """Shared key handling, client lifecycle, result shape and error routing."""
 
     # A misspelt option would otherwise be ignored and silently fall back to the server default.
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    # Errors never echo inputs: a misspelt key kwarg would otherwise print the API key.
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True, extra="forbid", hide_input_in_errors=True
+    )
 
     handle_tool_error: bool = True
     handle_validation_error: Union[bool, str, Any] = _format_validation_error
@@ -210,13 +213,15 @@ class _OctenVerticalTool(BaseTool):
     def _check_timeout(cls, value: Any) -> Any:
         if value is None:
             return value
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value <= 0
-        ):
-            raise ValueError(f"timeout must be a positive, finite number of seconds, got {value!r}")
+        message = "timeout must be a positive, finite number of seconds"
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{message}, got {type(value).__name__}")
+        try:
+            finite = math.isfinite(value)
+        except OverflowError:  # an int too large for a float
+            finite = False
+        if not finite or value <= 0:
+            raise ValueError(message)
         return value
 
     @model_validator(mode="after")
@@ -240,8 +245,6 @@ class _OctenVerticalTool(BaseTool):
             if isinstance(explicit, str):
                 explicit = SecretStr(explicit)
             elif explicit is not None and not isinstance(explicit, SecretStr):
-                # pydantic echoes the input in its error, and the value may be a secret.
-                values["octen_api_key"] = "<redacted>"
                 raise ValueError(
                     "octen_api_key must be a str or SecretStr, "
                     f"got {type(explicit).__name__}"

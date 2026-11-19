@@ -732,3 +732,43 @@ def test_failed_2xx_hint_reaches_model(sync_client: MagicMock) -> None:
 
     assert isinstance(result, str)
     assert MAY_HAVE_BEEN_SENT in result
+
+
+SECRET = "sk-live-SECRET-0123456789"
+
+
+@pytest.mark.parametrize("env_key", [None, "from-env"], ids=["no-env-key", "env-key"])
+@pytest.mark.parametrize("misspelt", ["octen_apikey", "octen_api_ky"])
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_misspelt_key_kwarg_does_not_leak_key(
+    case: Case, misspelt: str, env_key: Optional[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if env_key is None:
+        monkeypatch.delenv("OCTEN_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OCTEN_API_KEY", env_key)
+
+    with pytest.raises(ValueError) as exc_info:
+        case.tool_cls(**{misspelt: SECRET})
+
+    assert SECRET not in str(exc_info.value)
+    assert SECRET not in repr(exc_info.value)
+    if env_key is not None:
+        assert misspelt in str(exc_info.value)
+    else:
+        assert "OCTEN_API_KEY" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_option_error_does_not_leak_key(case: Case) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        case.tool_cls(octen_api_key=SECRET, timeout=-1)
+    assert SECRET not in str(exc_info.value)
+    assert SECRET not in repr(exc_info.value)
+
+
+@pytest.mark.parametrize("timeout", [10**400, -(10**400)], ids=["huge", "huge-negative"])
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_huge_int_timeout_rejected(case: Case, timeout: int) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        _tool(case, timeout=timeout)
