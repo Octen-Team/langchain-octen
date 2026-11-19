@@ -68,6 +68,9 @@ def classify(exc: Exception) -> Optional[str]:
                 return None
             # The server answered, so the call may have been served and billed.
             return f"{exc}. {MAY_HAVE_BEEN_SENT}"
+        if status in (502, 504):
+            # A gateway can answer after the backend served (and billed) the call.
+            return f"{exc}. {MAY_HAVE_BEEN_SENT}"
         if 500 <= status <= 599 or status in (400, 408, 422):
             return str(exc)
     return None

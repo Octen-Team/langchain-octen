@@ -109,6 +109,7 @@ def test_failed_2xx_warns_against_retry(exc: Exception) -> None:
 @pytest.mark.parametrize(
     "exc",
     [
+        OctenAPIError("internal error", status_code=500),
         OctenAPIError("unavailable", status_code=503),
         OctenAPIError("bad request", status_code=400),
         OctenRateLimitError(),
@@ -117,3 +118,18 @@ def test_failed_2xx_warns_against_retry(exc: Exception) -> None:
 )
 def test_non_2xx_model_errors_keep_plain_message(exc: Exception) -> None:
     assert classify(exc) == str(exc)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("bad gateway", status_code=502),
+        OctenAPIError("gateway timeout", status_code=504),
+    ],
+    ids=repr,
+)
+def test_gateway_errors_warn_against_retry(exc: Exception) -> None:
+    message = classify(exc)
+    assert message is not None
+    assert str(exc) in message
+    assert MAY_HAVE_BEEN_SENT in message

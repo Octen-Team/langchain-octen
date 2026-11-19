@@ -42,16 +42,20 @@ _LANGUAGE_DESCRIPTION = (
 )
 
 
-def _describe_errors(exc: Exception) -> str:
-    errors = getattr(exc, "errors", None)
-    if not callable(errors):
-        return str(exc)
+def _describe_details(details: Any) -> str:
     parts = []
-    for err in errors():
+    for err in details:
         loc = ".".join(str(p) for p in err.get("loc", ()))
         msg = str(err.get("msg", "invalid value"))
         parts.append(f"{loc}: {msg}" if loc else msg)
     return "; ".join(parts)
+
+
+def _describe_errors(exc: Exception) -> str:
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return str(exc)
+    return _describe_details(errors(include_url=False, include_input=False))
 
 
 def _format_validation_error(exc: Exception) -> str:
@@ -192,6 +196,21 @@ class _OctenVerticalTool(BaseTool):
     _sdk_method: ClassVar[Tuple[str, str]]
     _developer_options: ClassVar[Tuple[str, ...]]
     _request_model: ClassVar[Any]
+
+    def __init__(self, **kwargs: Any) -> None:
+        # pydantic keeps the raw input in errors() and json(), which would carry a misspelt
+        # API key; re-raise a plain ValueError built without inputs, outside the except block
+        # so the original is neither the cause nor the context.
+        error: Optional[ValueError] = None
+        try:
+            super().__init__(**kwargs)
+        except ValidationError as exc:
+            details = exc.errors(include_url=False, include_context=False, include_input=False)
+            error = ValueError(
+                f"invalid {type(self).__name__} configuration: {_describe_details(details)}"
+            )
+        if error is not None:
+            raise error
 
     @field_validator(
         "highlight",

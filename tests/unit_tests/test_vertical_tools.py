@@ -737,6 +737,24 @@ def test_failed_2xx_hint_reaches_model(sync_client: MagicMock) -> None:
 SECRET = "sk-live-SECRET-0123456789"
 
 
+def _assert_no_secret(exc: BaseException) -> None:
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        assert SECRET not in str(current)
+        assert SECRET not in repr(current)
+        errors = getattr(current, "errors", None)
+        if callable(errors):
+            assert SECRET not in repr(errors())
+        to_json = getattr(current, "json", None)
+        if callable(to_json):
+            assert SECRET not in to_json()
+        assert SECRET not in repr(getattr(current, "args", ()))
+        current = current.__cause__ or current.__context__
+    assert exc.__cause__ is None and exc.__context__ is None
+
+
 @pytest.mark.parametrize("env_key", [None, "from-env"], ids=["no-env-key", "env-key"])
 @pytest.mark.parametrize("misspelt", ["octen_apikey", "octen_api_ky"])
 @pytest.mark.parametrize("case", CASES, ids=_ids)
@@ -751,8 +769,7 @@ def test_misspelt_key_kwarg_does_not_leak_key(
     with pytest.raises(ValueError) as exc_info:
         case.tool_cls(**{misspelt: SECRET})
 
-    assert SECRET not in str(exc_info.value)
-    assert SECRET not in repr(exc_info.value)
+    _assert_no_secret(exc_info.value)
     if env_key is not None:
         assert misspelt in str(exc_info.value)
     else:
@@ -763,8 +780,14 @@ def test_misspelt_key_kwarg_does_not_leak_key(
 def test_option_error_does_not_leak_key(case: Case) -> None:
     with pytest.raises(ValueError) as exc_info:
         case.tool_cls(octen_api_key=SECRET, timeout=-1)
-    assert SECRET not in str(exc_info.value)
-    assert SECRET not in repr(exc_info.value)
+    _assert_no_secret(exc_info.value)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_non_string_key_error_has_no_input(case: Case) -> None:
+    with pytest.raises(ValueError, match="octen_api_key") as exc_info:
+        case.tool_cls(octen_api_key=[SECRET])
+    _assert_no_secret(exc_info.value)
 
 
 @pytest.mark.parametrize("timeout", [10**400, -(10**400)], ids=["huge", "huge-negative"])

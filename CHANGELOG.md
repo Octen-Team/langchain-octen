@@ -20,9 +20,9 @@
     400/408/422, 2xx responses with an error envelope or a malformed body, timeouts and
     connection errors are returned to the model. Invalid or unknown model arguments are
     rejected before any request is made.
-  - A timeout or connection error that may have happened after the request was sent is
-    reported to the model with a note that the call may already have been billed and should
-    not be retried automatically.
+  - A timeout or connection error that may have happened after the request was sent, a 502
+    or 504, or a failed 2xx response is reported to the model with a note that the call may
+    already have been billed and should not be retried automatically.
   - Dict options (`highlight`, `full_content`, `subjects`, `entities`, `places`,
     `web_search`) are deep-copied at construction; later changes to the caller's dicts have
     no effect.
