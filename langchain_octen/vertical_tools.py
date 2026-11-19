@@ -227,6 +227,14 @@ class _OctenVerticalTool(BaseTool):
         # Keep a private copy: later changes to the caller's nested dicts must not leak in.
         return copy.deepcopy(value)
 
+    @field_validator("response_format", mode="after")
+    @classmethod
+    def _check_response_format(cls, value: Any) -> Any:
+        # The tools return a dict; "content_and_artifact" would only fail after a paid call.
+        if value != "content":
+            raise ValueError('response_format must be "content"')
+        return value
+
     @field_validator("timeout", mode="before")
     @classmethod
     def _check_timeout(cls, value: Any) -> Any:

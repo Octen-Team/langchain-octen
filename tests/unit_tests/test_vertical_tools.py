@@ -795,3 +795,15 @@ def test_non_string_key_error_has_no_input(case: Case) -> None:
 def test_huge_int_timeout_rejected(case: Case, timeout: int) -> None:
     with pytest.raises(ValueError, match="timeout"):
         _tool(case, timeout=timeout)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_response_format_other_than_content_rejected(case: Case, sync_client: MagicMock) -> None:
+    with pytest.raises(ValueError, match="response_format"):
+        _tool(case, response_format="content_and_artifact")
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_response_format_content_accepted(case: Case) -> None:
+    assert _tool(case, response_format="content").response_format == "content"
