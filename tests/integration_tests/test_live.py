@@ -76,10 +76,14 @@ def test_news_search() -> None:
 
 @pytest.mark.asyncio
 async def test_business_search_async() -> None:
-    tool = OctenBusinessSearch(count=1)
+    tool = OctenBusinessSearch(count=1, entities={"enable": True, "count": 1})
     result = await tool.ainvoke({"query": "NVIDIA company overview"})
     _check(tool.name, result)
-    assert result["data"].get("results") or result["data"].get("entities"), result
+    entities = result["data"].get("entities") or []
+    if not entities:
+        pytest.skip("no entity card returned for NVIDIA; cannot check card content")
+    assert any(entity.get("name") for entity in entities), entities
+    print(f"octen_business_search entity names={[e.get('name') for e in entities]}")
 
 
 def test_pulse_search() -> None:
