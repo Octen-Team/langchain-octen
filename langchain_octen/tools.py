@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, List, Optional, Type
 
 from langchain_core.callbacks import (
@@ -11,7 +12,7 @@ from langchain_core.callbacks import (
 from langchain_core.tools import BaseTool, ToolException
 from pydantic import BaseModel, Field, SecretStr
 
-from langchain_octen._utilities import OctenSearchAPIWrapper
+from langchain_octen._utilities import SEARCH_TYPE_DEPRECATION, OctenSearchAPIWrapper
 
 
 class OctenSearchInput(BaseModel):
@@ -95,12 +96,13 @@ class OctenSearchResults(BaseTool):
     def __init__(self, **kwargs: Any) -> None:
         """Initialize OctenSearchResults, creating the underlying API wrapper."""
         super().__init__(**kwargs)
+        if self.search_type is not None:
+            warnings.warn(SEARCH_TYPE_DEPRECATION, DeprecationWarning, stacklevel=2)
         wrapper_kwargs: Dict[str, Any] = {}
         if self.octen_api_key is not None:
             wrapper_kwargs["octen_api_key"] = self.octen_api_key
         wrapper_kwargs["max_results"] = self.max_results
         for field_name in (
-            "search_type",
             "include_domains",
             "exclude_domains",
             "include_text",
