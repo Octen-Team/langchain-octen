@@ -58,9 +58,9 @@ class OctenSearchResults(BaseTool):
     Use within an agent:
         .. code-block:: python
 
-            from langgraph.prebuilt import create_react_agent
+            from langchain.agents import create_agent
 
-            agent = create_react_agent(llm, [tool])
+            agent = create_agent(model=llm, tools=[tool])
     """
 
     name: str = "octen_search"
