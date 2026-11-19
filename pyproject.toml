@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langchain-octen"
-version = "0.1.1"
+version = "0.2.0"
 description = "LangChain integration for Octen Web Search"
 authors = ["Octen Team <support@octen.ai>"]
 license = "MIT"
@@ -51,7 +51,6 @@ line-length = 100
 select = ["E", "F", "I", "W"]
 
 [tool.mypy]
-python_version = "3.9"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

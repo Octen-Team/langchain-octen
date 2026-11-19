@@ -4,7 +4,7 @@ test:
 	poetry run pytest tests/unit_tests -v
 
 integration_tests:
-	poetry run pytest tests/integration_tests -v
+	OCTEN_LIVE=1 poetry run pytest tests/integration_tests -v -s
 
 lint:
 	poetry run ruff check langchain_octen tests
