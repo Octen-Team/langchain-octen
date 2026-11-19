@@ -353,18 +353,18 @@ class TestOctenSearchResults:
 
 class TestSearchTypeDeprecation:
     @patch("octen.Octen")
-    def test_search_type_is_ignored_with_deprecation_warning(
+    def test_search_type_is_ignored_with_future_warning(
         self, mock_octen_cls: MagicMock
     ) -> None:
         mock_client = MagicMock()
         mock_octen_cls.return_value = mock_client
         mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
 
-        with pytest.warns(DeprecationWarning, match="search_type") as record:
+        with pytest.warns(FutureWarning, match="search_type") as record:
             tool = OctenSearchResults(
                 octen_api_key=SecretStr(FAKE_API_KEY), search_type="semantic"
             )
-        deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
+        deprecations = [w for w in record if issubclass(w.category, FutureWarning)]
         assert len(deprecations) == 1
         assert deprecations[0].filename == __file__
         tool.invoke({"query": "test"})
@@ -373,7 +373,7 @@ class TestSearchTypeDeprecation:
         assert "search_type" not in call_kwargs
 
     def test_wrapper_search_type_warns(self) -> None:
-        with pytest.warns(DeprecationWarning, match="search_type") as record:
+        with pytest.warns(FutureWarning, match="search_type") as record:
             wrapper = OctenSearchAPIWrapper(
                 octen_api_key=SecretStr(FAKE_API_KEY), search_type="semantic"
             )
@@ -382,7 +382,7 @@ class TestSearchTypeDeprecation:
 
     def test_no_warning_without_search_type(self, recwarn: pytest.WarningsRecorder) -> None:
         OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
-        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+        assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
 
     @patch("octen.Octen")
     def test_existing_tool_client_disables_retry_after_send(

@@ -101,7 +101,7 @@ class OctenSearchResults(BaseTool):
         """Initialize OctenSearchResults, creating the underlying API wrapper."""
         super().__init__(**kwargs)
         if self.search_type is not None:
-            warnings.warn(SEARCH_TYPE_DEPRECATION, DeprecationWarning, stacklevel=2)
+            warnings.warn(SEARCH_TYPE_DEPRECATION, FutureWarning, stacklevel=2)
         wrapper_kwargs: Dict[str, Any] = {}
         if self.octen_api_key is not None:
             wrapper_kwargs["octen_api_key"] = self.octen_api_key

@@ -44,7 +44,7 @@ class OctenSearchAPIWrapper(BaseModel):
     def __init__(self, **data: Any) -> None:
         super().__init__(**data)
         if self.search_type is not None:
-            warnings.warn(SEARCH_TYPE_DEPRECATION, DeprecationWarning, stacklevel=2)
+            warnings.warn(SEARCH_TYPE_DEPRECATION, FutureWarning, stacklevel=2)
 
     @model_validator(mode="before")
     @classmethod

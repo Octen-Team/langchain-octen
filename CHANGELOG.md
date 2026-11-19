@@ -33,8 +33,9 @@
 ### Fixed
 
 - `search_type` no longer breaks every call. `octen` 0.5.0 removed the parameter, so passing
-  it raised `TypeError`. It is now accepted but ignored, with a `DeprecationWarning`; it will
-  be removed in a future release.
+  it raised `TypeError`. It is now accepted but ignored, and building the tool emits a
+  `FutureWarning` (shown by default, unlike `DeprecationWarning`); it will be removed in a
+  future release.
 
 ### Known inconsistency
 

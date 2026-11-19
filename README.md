@@ -278,7 +278,7 @@ Constructor options of `OctenSearchResults`:
 |---|---|---|---|
 | `octen_api_key` | `str` | env `OCTEN_API_KEY` | Octen API key |
 | `max_results` | `int` | `5` | Number of results (1-100) |
-| `search_type` | `str` | `None` | Deprecated and ignored (emits `DeprecationWarning`); the API no longer accepts it |
+| `search_type` | `str` | `None` | Deprecated and ignored (emits `FutureWarning`); the API no longer accepts it |
 | `include_domains` | `list[str]` | `None` | Restrict to these domains |
 | `exclude_domains` | `list[str]` | `None` | Exclude these domains |
 | `include_text` | `list[str]` | `None` | Text that must appear in results |
