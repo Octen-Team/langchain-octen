@@ -1,0 +1,438 @@
+"""Unit tests for the vertical search tools (mocked SDK, no network)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, FrozenSet, Tuple, Type
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import octen
+import pytest
+from langchain_core.tools import BaseTool
+from octen import (
+    OctenAPIError,
+    OctenAuthenticationError,
+    OctenConnectionError,
+    OctenRateLimitError,
+    OctenTimeoutError,
+    OctenValidationError,
+)
+from pydantic import SecretStr
+
+from langchain_octen import (
+    OctenBroadSearch,
+    OctenBusinessSearch,
+    OctenNewsSearch,
+    OctenPlaceSearch,
+    OctenPulseSearch,
+)
+
+FAKE_API_KEY = "test-api-key-12345"
+FILTER_ARGS = frozenset({"query", "include_domains", "exclude_domains", "time_range", "language"})
+
+
+@dataclass(frozen=True)
+class Case:
+    tool_cls: Type[BaseTool]
+    name: str
+    sdk_path: Tuple[str, str]
+    response_cls: Type[Any]
+    model_args: FrozenSet[str]
+    options: Dict[str, Any]
+
+
+CASES = [
+    Case(
+        OctenBroadSearch,
+        "octen_broad_search",
+        ("search", "broad_search"),
+        octen.BroadSearchResponse,
+        FILTER_ARGS,
+        {"count": 3, "highlight": {"enable": True}, "full_content": {"enable": False},
+         "max_queries": 4},
+    ),
+    Case(
+        OctenNewsSearch,
+        "octen_news_search",
+        ("search", "news_search"),
+        octen.NewsSearchResponse,
+        FILTER_ARGS,
+        {"count": 3, "highlight": {"enable": True}, "full_content": {"enable": False},
+         "subjects": {"enable": True}},
+    ),
+    Case(
+        OctenBusinessSearch,
+        "octen_business_search",
+        ("search", "business_search"),
+        octen.BusinessSearchResponse,
+        FILTER_ARGS,
+        {"count": 3, "highlight": {"enable": True}, "full_content": {"enable": False},
+         "entities": {"count": 2}},
+    ),
+    Case(
+        OctenPulseSearch,
+        "octen_pulse_search",
+        ("search", "pulse_search"),
+        octen.PulseSearchResponse,
+        frozenset({"query"}),
+        {"count": 3, "highlight": {"enable": True}, "full_content": {"enable": False},
+         "mode": "standard"},
+    ),
+    Case(
+        OctenPlaceSearch,
+        "octen_place_search",
+        ("place_search", "search"),
+        octen.PlaceSearchResponse,
+        frozenset({"query", "latitude", "longitude", "radius", "user_location"}),
+        {"places": {"count": 1}, "web_search": {"enable": True}},
+    ),
+]
+FILTERED_CASES = [c for c in CASES if c.model_args == FILTER_ARGS]
+PLACE = CASES[-1]
+
+
+def _ids(case: Case) -> str:
+    return case.name
+
+
+def _response(case: Case, meta: Any = None, request_id: Any = "rid") -> Any:
+    data = {"results": [{"title": "T", "url": "https://example.com"}], "subjects": [{"name": "S"}]}
+    extra = {} if request_id is None else {"request_id": request_id}
+    return case.response_cls(code=0, msg="success", data=data, meta=meta or {}, **extra)
+
+
+def _sdk_method(client: MagicMock, case: Case) -> MagicMock:
+    resource, method = case.sdk_path
+    return getattr(getattr(client, resource), method)  # type: ignore[no-any-return]
+
+
+def _tool(case: Case, **kwargs: Any) -> BaseTool:
+    return case.tool_cls(octen_api_key=SecretStr(FAKE_API_KEY), **kwargs)
+
+
+@pytest.fixture
+def sync_client() -> Any:
+    with patch("octen.Octen") as mock_cls:
+        yield mock_cls
+
+
+@pytest.fixture
+def async_client() -> Any:
+    with patch("octen.AsyncOcten") as mock_cls:
+        mock_cls.return_value = AsyncMock()
+        yield mock_cls
+
+
+def test_tool_names() -> None:
+    names = [_tool(c).name for c in CASES]
+    assert names == [
+        "octen_broad_search",
+        "octen_news_search",
+        "octen_business_search",
+        "octen_pulse_search",
+        "octen_place_search",
+    ]
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_model_schema_exposes_only_allowed_args(case: Case) -> None:
+    assert set(_tool(case).args) == case.model_args
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_developer_options_are_not_model_args(case: Case) -> None:
+    tool = _tool(case)
+    assert not set(tool.args) & (set(case.options) | {"timeout", "octen_api_key"})
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_missing_key_raises_at_construction(
+    case: Case, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OCTEN_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OCTEN_API_KEY"):
+        case.tool_cls()
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_key_read_from_env(case: Case, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTEN_API_KEY", "from-env")
+    tool = case.tool_cls()
+    assert tool.octen_api_key.get_secret_value() == "from-env"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_developer_options_forwarded(case: Case, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).return_value = _response(case)
+
+    _tool(case, timeout=12.5, **case.options).invoke({"query": "q"})
+
+    sync_client.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+    _sdk_method(client, case).assert_called_once_with(query="q", timeout=12.5, **case.options)
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_unset_options_not_sent(case: Case, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).return_value = _response(case)
+
+    _tool(case).invoke({"query": "q"})
+
+    _sdk_method(client, case).assert_called_once_with(query="q")
+
+
+@pytest.mark.parametrize("case", FILTERED_CASES, ids=_ids)
+def test_model_filters_forwarded(case: Case, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).return_value = _response(case)
+
+    _tool(case, count=2).invoke(
+        {
+            "query": "q",
+            "include_domains": ["a.com"],
+            "exclude_domains": ["b.com"],
+            "time_range": "week",
+            "language": ["en"],
+        }
+    )
+
+    _sdk_method(client, case).assert_called_once_with(
+        query="q",
+        count=2,
+        include_domains=["a.com"],
+        exclude_domains=["b.com"],
+        time_range="week",
+        language=["en"],
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_returns_data_request_id_warning(case: Case, sync_client: MagicMock) -> None:
+    response = _response(case, meta={"warning": "places_unavailable", "latency": 5})
+    _sdk_method(sync_client.return_value, case).return_value = response
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert result == {
+        "data": response.data,
+        "request_id": "rid",
+        "warning": "places_unavailable",
+    }
+
+
+@pytest.mark.parametrize("meta", [{"warning": ""}, {"warning": None}, {}], ids=str)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_empty_warning_omitted(case: Case, meta: Dict[str, Any], sync_client: MagicMock) -> None:
+    response = _response(case, meta=meta)
+    _sdk_method(sync_client.return_value, case).return_value = response
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert result == {"data": response.data, "request_id": "rid"}
+
+
+def test_missing_request_id_is_none(sync_client: MagicMock) -> None:
+    case = CASES[1]
+    _sdk_method(sync_client.return_value, case).return_value = _response(case, request_id=None)
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert result["request_id"] is None
+
+
+TRANSIENT_ERRORS = [
+    OctenRateLimitError(request_id="rid-429"),
+    OctenAPIError("upstream unavailable", status_code=503),
+    OctenAPIError("invalid language", status_code=400),
+    OctenAPIError("unprocessable", status_code=422),
+    OctenTimeoutError(timeout=30.0),
+    OctenConnectionError(),
+]
+CONFIG_ERRORS = [
+    OctenAuthenticationError(),
+    OctenAPIError("insufficient balance", status_code=403),
+    OctenValidationError("count must be <= 100"),
+    OctenAPIError("not found", status_code=404),
+    RuntimeError("unexpected"),
+]
+
+
+@pytest.mark.parametrize("exc", TRANSIENT_ERRORS, ids=repr)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_transient_errors_go_to_model(
+    case: Case, exc: Exception, sync_client: MagicMock
+) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).side_effect = exc
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert isinstance(result, str)
+    assert str(exc) in result
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("exc", CONFIG_ERRORS, ids=repr)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_config_errors_raise(case: Case, exc: Exception, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    _sdk_method(client, case).side_effect = exc
+
+    with pytest.raises(type(exc)):
+        _tool(case).invoke({"query": "q"})
+    client.close.assert_called_once()
+
+
+@pytest.mark.parametrize("case", FILTERED_CASES, ids=_ids)
+def test_bad_time_range_goes_to_model(case: Case, sync_client: MagicMock) -> None:
+    result = _tool(case).invoke({"query": "x", "time_range": "last week"})
+
+    assert isinstance(result, str)
+    assert "time_range" in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize("case", FILTERED_CASES, ids=_ids)
+def test_oversized_domain_goes_to_model(case: Case, sync_client: MagicMock) -> None:
+    result = _tool(case).invoke({"query": "x", "include_domains": ["a" * 61 + ".com"]})
+
+    assert isinstance(result, str)
+    assert "include_domains" in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_oversized_query_goes_to_model(case: Case, sync_client: MagicMock) -> None:
+    result = _tool(case).invoke({"query": "x" * 501})
+
+    assert isinstance(result, str)
+    assert "query" in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [{"latitude": 35.68}, {"longitude": 139.76}],
+    ids=["latitude-only", "longitude-only"],
+)
+def test_place_half_coordinate_goes_to_model(
+    args: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    result = _tool(PLACE).invoke({"query": "coffee", **args})
+
+    assert isinstance(result, str)
+    assert "latitude" in result and "longitude" in result
+    sync_client.assert_not_called()
+
+
+def test_place_radius_without_point_goes_to_model(sync_client: MagicMock) -> None:
+    result = _tool(PLACE).invoke({"query": "coffee", "radius": 500})
+
+    assert isinstance(result, str)
+    assert "radius" in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"latitude": 91, "longitude": 0},
+        {"latitude": 0, "longitude": -181},
+        {"latitude": 0, "longitude": 0, "radius": 0},
+        {"latitude": 0, "longitude": 0, "radius": 50001},
+    ],
+    ids=["lat-91", "lon-181", "radius-0", "radius-50001"],
+)
+def test_place_out_of_range_goes_to_model(args: Dict[str, Any], sync_client: MagicMock) -> None:
+    result = _tool(PLACE).invoke({"query": "coffee", **args})
+
+    assert isinstance(result, str)
+    sync_client.assert_not_called()
+
+
+def test_place_point_and_radius_forwarded(sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.place_search.search.return_value = _response(PLACE)
+
+    _tool(PLACE).invoke(
+        {"query": "coffee", "latitude": 35.68, "longitude": 139.76, "radius": 800}
+    )
+
+    client.place_search.search.assert_called_once_with(
+        query="coffee", latitude=35.68, longitude=139.76, radius=800
+    )
+
+
+def test_place_user_location_sets_approximate(sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.place_search.search.return_value = _response(PLACE)
+
+    _tool(PLACE).invoke(
+        {"query": "ramen", "user_location": {"city": "Tokyo", "country": "JP"}}
+    )
+
+    client.place_search.search.assert_called_once_with(
+        query="ramen",
+        user_location={"type": "approximate", "city": "Tokyo", "country": "JP"},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+async def test_async_uses_async_client_and_closes(case: Case, async_client: MagicMock) -> None:
+    client = async_client.return_value
+    response = _response(case)
+    _sdk_method(client, case).return_value = response
+
+    result = await _tool(case, count=None, timeout=5.0).ainvoke({"query": "q"})
+
+    async_client.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+    _sdk_method(client, case).assert_awaited_once_with(query="q", timeout=5.0)
+    client.close.assert_awaited_once()
+    assert result == {"data": response.data, "request_id": "rid"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+async def test_async_closes_on_config_error(case: Case, async_client: MagicMock) -> None:
+    client = async_client.return_value
+    _sdk_method(client, case).side_effect = OctenAuthenticationError()
+
+    with pytest.raises(OctenAuthenticationError):
+        await _tool(case).ainvoke({"query": "q"})
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+async def test_async_transient_error_goes_to_model(case: Case, async_client: MagicMock) -> None:
+    client = async_client.return_value
+    exc = OctenRateLimitError()
+    _sdk_method(client, case).side_effect = exc
+
+    result = await _tool(case).ainvoke({"query": "q"})
+
+    assert isinstance(result, str)
+    assert str(exc) in result
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("case", "options"),
+    [
+        (CASES[0], {"max_queries": 1000}),
+        (CASES[1], {"count": 1000}),
+        (CASES[2], {"entities": {"count": 1000}}),
+        (CASES[3], {"mode": "turbo"}),
+        (PLACE, {"places": {"count": 1000}}),
+    ],
+    ids=["broad-max_queries", "news-count", "business-entities", "pulse-mode", "place-places"],
+)
+def test_invalid_developer_option_raises_from_real_sdk(
+    case: Case, options: Dict[str, Any]
+) -> None:
+    # Real client: octen validates locally and raises before any request is made.
+    with pytest.raises(OctenValidationError):
+        _tool(case, **options).invoke({"query": "q"})

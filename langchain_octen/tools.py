@@ -65,9 +65,13 @@ class OctenSearchResults(BaseTool):
 
     name: str = "octen_search"
     description: str = (
-        "A web search engine powered by Octen. "
-        "Useful for finding up-to-date information on the internet. "
-        "Input should be a search query string."
+        "Search the live web and return ranked results (title, url, snippet): fast, "
+        "fresh, real-time web search for one focused lookup. Narrow with include_domains "
+        "/ exclude_domains.\n\n"
+        "USE FOR a single focused lookup that needs real retrieval: one fact, one page, "
+        "one document you do not already know the address of. If the question spans "
+        "several independent subtopics, one broad search covers it better than a "
+        "sequence of calls to this tool."
     )
     args_schema: Type[BaseModel] = OctenSearchInput
     handle_tool_error: bool = True
