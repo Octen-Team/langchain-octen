@@ -84,7 +84,8 @@ async def test_business_search_async() -> None:
 
 def test_pulse_search() -> None:
     tool = OctenPulseSearch(count=1)
-    result = tool.invoke({"query": "github docs"})
+    # Plain-string input, as some agents and chains pass it; the other tests use dicts.
+    result = tool.invoke("github docs")
     _check(tool.name, result)
     assert result["data"]["results"], result
 
