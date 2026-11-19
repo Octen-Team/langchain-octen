@@ -2,6 +2,26 @@
 
 ## 0.2.0
 
+### Upgrading from 0.1.x
+
+Existing code keeps working: `OctenSearchResults` (`octen_search`) has the same
+parameters, return shape and error behaviour. Things that do change:
+
+- **`octen` is upgraded to 0.12.0 or newer.** If your project pins `octen` below
+  0.12.0, dependency resolution fails until you relax that pin.
+- **No retry after a request was sent.** A request that timed out or lost its
+  connection after it was sent is no longer retried, so it can't be billed a
+  second time by the retry. Calls that used to succeed on such a retry now
+  return `[{"error": ...}]`. Retries on status codes (408, 429, 5xx) are
+  unchanged.
+- **`search_type` is ignored.** With `octen` 0.5.0 or newer, passing it used to
+  raise `TypeError`; it now works and emits a `FutureWarning`. If you relied on
+  it with an older `octen`, it no longer has any effect.
+- **Reworded tool description.** The model sees a new description for
+  `octen_search`, so when it chooses the tool may shift slightly.
+- The five new tools are separate classes; nothing is added to an agent unless
+  you pass them in.
+
 ### Added
 
 - Five vertical search tools: `OctenBroadSearch` (`octen_broad_search`), `OctenNewsSearch`
