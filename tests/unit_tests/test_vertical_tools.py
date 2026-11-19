@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -472,3 +473,48 @@ def test_unknown_constructor_kwarg_rejected(case: Case) -> None:
 def test_pulse_mode_is_enumerated() -> None:
     annotation = OctenPulseSearch.model_fields["mode"].annotation
     assert annotation == Optional[Literal["lite", "standard"]]
+
+
+@pytest.mark.parametrize("exc", CONFIG_ERRORS, ids=repr)
+def test_raised_errors_are_logged(
+    exc: Exception, sync_client: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    case = CASES[1]
+    _sdk_method(sync_client.return_value, case).side_effect = exc
+
+    with caplog.at_level(logging.ERROR, logger="langchain_octen"):
+        with pytest.raises(type(exc)):
+            _tool(case).invoke({"query": "q"})
+
+    records = [r for r in caplog.records if r.name == "langchain_octen"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert type(exc).__name__ in records[0].getMessage()
+    assert str(exc) in records[0].getMessage()
+    assert FAKE_API_KEY not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_raised_error_is_logged(
+    async_client: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    case = PLACE
+    _sdk_method(async_client.return_value, case).side_effect = OctenAuthenticationError()
+
+    with caplog.at_level(logging.ERROR, logger="langchain_octen"):
+        with pytest.raises(OctenAuthenticationError):
+            await _tool(case).ainvoke({"query": "q"})
+
+    assert [r.levelno for r in caplog.records if r.name == "langchain_octen"] == [logging.ERROR]
+
+
+def test_transient_error_is_not_logged(
+    sync_client: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    case = CASES[1]
+    _sdk_method(sync_client.return_value, case).side_effect = OctenRateLimitError()
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_octen"):
+        _tool(case).invoke({"query": "q"})
+
+    assert not [r for r in caplog.records if r.name == "langchain_octen"]

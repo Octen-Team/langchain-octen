@@ -144,6 +144,8 @@ results = tool.invoke({"query": "Python documentation"})
   - Raised to your code: authentication failure (`octen.OctenAuthenticationError`, 401),
     no access or insufficient balance (`octen.OctenAPIError` with status 403) and other 4xx
     responses.
+    Some agent runtimes catch exceptions raised by tools, so each of these is also logged at
+    ERROR level to the `langchain_octen` logger.
   - Constructor options are checked when the tool is built: an out-of-range value
     (`count=1000`) or a misspelt option name (`max_querys=3`) raises `ValueError` naming it.
   - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):

@@ -7,6 +7,7 @@ the tool is constructed.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
 
 import octen
@@ -53,6 +54,18 @@ def _describe_errors(exc: Exception) -> str:
 def _format_validation_error(exc: Exception) -> str:
     """Tell the model which argument was wrong, so it can retry with a fixed call."""
     return "Invalid tool input: " + _describe_errors(exc)
+
+
+logger = logging.getLogger("langchain_octen")
+
+
+def _route(exc: Exception) -> Optional[str]:
+    """Return the message for the model, or log and return ``None`` if ``exc`` is raised."""
+    message = classify(exc)
+    if message is None:
+        # Some agent runtimes catch tool exceptions; the log keeps config errors visible.
+        logger.error("%s: %s", type(exc).__name__, exc)
+    return message
 
 
 # Stands in for the model's query when developer options are checked at construction.
@@ -231,7 +244,7 @@ class _OctenVerticalTool(BaseTool):
         try:
             response = self._method(client)(**kwargs)
         except Exception as exc:
-            message = classify(exc)
+            message = _route(exc)
             if message is None:
                 raise
             raise ToolException(message) from exc
@@ -249,7 +262,7 @@ class _OctenVerticalTool(BaseTool):
         try:
             response = await self._method(client)(**kwargs)
         except Exception as exc:
-            message = classify(exc)
+            message = _route(exc)
             if message is None:
                 raise
             raise ToolException(message) from exc
