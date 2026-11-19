@@ -8,6 +8,7 @@ the tool is constructed.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
 
 import octen
@@ -23,6 +24,7 @@ from pydantic import (
     SecretStr,
     StringConstraints,
     ValidationError,
+    field_validator,
     model_validator,
 )
 from typing_extensions import Annotated
@@ -75,6 +77,9 @@ _PLACEHOLDER_QUERY = "placeholder"
 class OctenFilteredSearchInput(BaseModel):
     """Model-facing arguments shared by Broad, News and Business search."""
 
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=1, max_length=500, description=_QUERY_DESCRIPTION)
     include_domains: Optional[List[_Domain]] = Field(
         default=None,
@@ -96,6 +101,9 @@ class OctenFilteredSearchInput(BaseModel):
 class OctenPulseSearchInput(BaseModel):
     """Model-facing arguments of Pulse search."""
 
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(
         min_length=1,
         max_length=500,
@@ -105,6 +113,9 @@ class OctenPulseSearchInput(BaseModel):
 
 class OctenUserLocation(BaseModel):
     """Approximate location of the user, for when coordinates are unknown."""
+
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
 
     city: Optional[str] = Field(default=None, description="City name.")
     region: Optional[str] = Field(default=None, description="State, province or region.")
@@ -116,6 +127,9 @@ class OctenUserLocation(BaseModel):
 
 class OctenPlaceSearchInput(BaseModel):
     """Model-facing arguments of Place search."""
+
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
 
     query: str = Field(
         min_length=1,
@@ -174,6 +188,20 @@ class _OctenVerticalTool(BaseTool):
     _sdk_method: ClassVar[Tuple[str, str]]
     _developer_options: ClassVar[Tuple[str, ...]]
     _request_model: ClassVar[Any]
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _check_timeout(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"timeout must be a positive, finite number of seconds, got {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _check_developer_options(self) -> "_OctenVerticalTool":
@@ -236,10 +264,12 @@ class _OctenVerticalTool(BaseTool):
 
     def _run(
         self,
+        query: str,
+        *,
         run_manager: Optional[CallbackManagerForToolRun] = None,
         **model_args: Any,
     ) -> Dict[str, Any]:
-        kwargs = self._request(model_args)
+        kwargs = self._request({"query": query, **model_args})
         client: Any = sync_client(self._api_key())
         try:
             response = self._method(client)(**kwargs)
@@ -254,10 +284,12 @@ class _OctenVerticalTool(BaseTool):
 
     async def _arun(
         self,
+        query: str,
+        *,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
         **model_args: Any,
     ) -> Dict[str, Any]:
-        kwargs = self._request(model_args)
+        kwargs = self._request({"query": query, **model_args})
         client: Any = async_client(self._api_key())
         try:
             response = await self._method(client)(**kwargs)

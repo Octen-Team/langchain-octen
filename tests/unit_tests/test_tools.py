@@ -414,3 +414,15 @@ class TestSearchTypeDeprecation:
     def test_unknown_kwarg_still_ignored(self) -> None:
         # 0.1 behaviour of the old tool is kept: unknown constructor kwargs are ignored.
         OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), max_resutls=3)
+
+    @patch("octen.Octen")
+    def test_unknown_model_arg_still_ignored(self, mock_octen_cls: MagicMock) -> None:
+        # The old octen_search schema keeps ignoring unknown arguments, as in 0.1.
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        results = tool.invoke({"query": "test", "include_domain": ["a.com"]})
+
+        assert isinstance(results, list) and len(results) == 2

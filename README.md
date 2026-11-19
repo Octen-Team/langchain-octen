@@ -147,12 +147,14 @@ results = tool.invoke({"query": "Python documentation"})
     Some agent runtimes catch exceptions raised by tools, so each of these is also logged at
     ERROR level to the `langchain_octen` logger.
   - Constructor options are checked when the tool is built: an out-of-range value
-    (`count=1000`) or a misspelt option name (`max_querys=3`) raises `ValueError` naming it.
+    (`count=1000`), a misspelt option name (`max_querys=3`) or a `timeout` that is not a
+    positive finite number raises `ValueError` naming it.
   - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):
     rate limits (429), server errors (5xx), 400/408/422 responses, 2xx responses carrying an
     error envelope or a malformed body, timeouts and connection errors.
-  - Invalid model arguments (an unknown `time_range`, half a coordinate pair, a `radius`
-    without a point, values out of range) are rejected before any request is made, and the
+  - Invalid model arguments (an unknown `time_range`, a misspelt argument name such as
+    `include_domain`, half a coordinate pair, a `radius` without a point, values out of
+    range) are rejected before any request is made, and the
     model gets a message naming the argument.
 - Every tool takes `octen_api_key` (falls back to `OCTEN_API_KEY`; missing key raises
   `ValueError` at construction) and `timeout` (seconds).

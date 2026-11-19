@@ -545,3 +545,87 @@ def test_forwarded_names_are_sdk_parameters(case: Case) -> None:
     for cls in (sync_cls, async_cls):
         params = set(inspect.signature(getattr(cls, method)).parameters)
         assert forwarded <= params, (cls.__name__, method, forwarded - params)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_plain_string_input(case: Case, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    response = _response(case)
+    _sdk_method(client, case).return_value = response
+
+    result = _tool(case).invoke("coffee")
+
+    _sdk_method(client, case).assert_called_once_with(query="coffee")
+    assert result == {"data": response.data, "request_id": "rid"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+async def test_plain_string_input_async(case: Case, async_client: MagicMock) -> None:
+    client = async_client.return_value
+    response = _response(case)
+    _sdk_method(client, case).return_value = response
+
+    result = await _tool(case).ainvoke("coffee")
+
+    _sdk_method(client, case).assert_awaited_once_with(query="coffee")
+    assert result == {"data": response.data, "request_id": "rid"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+async def test_dict_input_async(case: Case, async_client: MagicMock) -> None:
+    client = async_client.return_value
+    _sdk_method(client, case).return_value = _response(case)
+
+    await _tool(case).ainvoke({"query": "coffee"})
+
+    _sdk_method(client, case).assert_awaited_once_with(query="coffee")
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [0, -1, 0.0, float("nan"), float("inf"), float("-inf"), True, False],
+    ids=repr,
+)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_invalid_timeout_rejected(case: Case, timeout: Any) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        _tool(case, timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [None, 0.5, 30, 120.0], ids=repr)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_valid_timeout_accepted(case: Case, timeout: Any) -> None:
+    assert _tool(case, timeout=timeout).timeout == timeout  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("case", "args", "bad_name"),
+    [
+        (CASES[0], {"query": "x", "include_domain": ["a.com"]}, "include_domain"),
+        (CASES[1], {"query": "x", "timerange": "week"}, "timerange"),
+        (CASES[2], {"query": "x", "count": 50}, "count"),
+        (CASES[3], {"query": "x", "count": 10}, "count"),
+        (CASES[3], {"query": "x", "language": ["en"]}, "language"),
+        (PLACE, {"query": "x", "lat": 35.0, "lng": 139.0}, "lat"),
+        (PLACE, {"query": "x", "user_location": {"cty": "Tokyo"}}, "cty"),
+    ],
+    ids=[
+        "broad-include_domain",
+        "news-timerange",
+        "business-count",
+        "pulse-count",
+        "pulse-language",
+        "place-lat-lng",
+        "place-user_location-cty",
+    ],
+)
+def test_unknown_model_arg_goes_to_model(
+    case: Case, args: Dict[str, Any], bad_name: str, sync_client: MagicMock
+) -> None:
+    result = _tool(case).invoke(args)
+
+    assert isinstance(result, str)
+    assert bad_name in result
+    sync_client.assert_not_called()
