@@ -5,6 +5,15 @@
 
 LangChain integration for [Octen Web Search](https://octen.ai). Use Octen's fast, real-time web search inside LangChain agents and chains.
 
+| Tool class | Tool name | Use it for |
+|---|---|---|
+| `OctenSearchResults` | `octen_search` | One focused web lookup |
+| `OctenBroadSearch` | `octen_broad_search` | Multi-part questions, comparisons, surveys (fans out into sub-queries) |
+| `OctenNewsSearch` | `octen_news_search` | Recent news, with articles grouped into storylines |
+| `OctenBusinessSearch` | `octen_business_search` | Company and person cards (financials, key people, career history) |
+| `OctenPulseSearch` | `octen_pulse_search` | The URL of a docs page or site you could almost name |
+| `OctenPlaceSearch` | `octen_place_search` | Real-world places, near a point or in a city |
+
 ## Installation
 
 ```bash
@@ -27,7 +36,7 @@ from langchain_octen import OctenSearchResults
 tool = OctenSearchResults(octen_api_key="your-api-key")
 ```
 
-## Usage
+## Web search (`OctenSearchResults`)
 
 ### Basic Search
 
@@ -113,13 +122,173 @@ tool = OctenSearchResults(
 results = tool.invoke({"query": "Python documentation"})
 ```
 
+## Vertical search tools
+
+`OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`, `OctenPulseSearch` and
+`OctenPlaceSearch` share one design:
+
+- **The model only controls the query and search filters; you control the billing-related
+  options and limits** (result counts, highlight / full content, Broad `max_queries`, ...)
+  when you construct the tool. Options you leave unset are not sent, so the server defaults
+  apply. Broad Search is billed per sub-query: `max_queries` is an upper bound, and how many
+  sub-queries a question actually produces depends on the query.
+- **Every call returns a dict:**
+
+  ```python
+  {
+      "data": {...},          # the response's data, unchanged (results, places, entities, ...)
+      "request_id": "...",    # quote it when contacting support
+      "warning": "...",       # only present when the API attached a non-empty warning
+  }
+  ```
+
+- **Errors are split by who can fix them.**
+  - Raised to your code: authentication failure (`octen.OctenAuthenticationError`, 401),
+    no access or insufficient balance (`octen.OctenAPIError` with status 403) and other 4xx
+    responses.
+    Some agent runtimes catch exceptions raised by tools, so each of these is also logged at
+    ERROR level to the `langchain_octen` logger.
+  - Constructor options are checked when the tool is built: an out-of-range value
+    (`count=1000`), a misspelt option name (`max_querys=3`) or a `timeout` that is not a
+    positive finite number raises `ValueError` naming it.
+  - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):
+    rate limits (429), server errors (5xx), 400/408/422 responses, 2xx responses carrying an
+    error envelope or a malformed body, timeouts and connection errors. For a timeout or
+    connection error that may have happened after the request was sent, a 502 or 504 (a
+    gateway can return these after the backend served the call), or a failed 2xx response,
+    the message also tells the model the call may already have been billed and should not
+    be retried automatically.
+  - Invalid model arguments (an unknown `time_range`, a misspelt argument name such as
+    `include_domain`, half a coordinate pair, a `radius` without a point, values out of
+    range) are rejected before any request is made, and the
+    model gets a message naming the argument.
+- Every tool takes `octen_api_key` (falls back to `OCTEN_API_KEY`; missing key raises
+  `ValueError` at construction) and `timeout` (seconds).
+
+```python
+from langchain_octen import (
+    OctenBroadSearch,
+    OctenBusinessSearch,
+    OctenNewsSearch,
+    OctenPlaceSearch,
+    OctenPulseSearch,
+)
+from langgraph.prebuilt import create_react_agent
+
+tools = [
+    OctenNewsSearch(count=5),
+    OctenBusinessSearch(entities={"count": 2}),
+    OctenPlaceSearch(places={"count": 5}),
+]
+agent = create_react_agent(llm, tools)
+```
+
+### Broad Search (`OctenBroadSearch`)
+
+Expands one question into several sub-queries, searches them concurrently, and returns the
+results grouped per sub-query (`data.queries`, `data.search_results`; not deduplicated).
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (per sub-query, 1-100), `max_queries` (1-30), `highlight`, `full_content`, `timeout` |
+
+```python
+tool = OctenBroadSearch(max_queries=5, count=3)
+result = tool.invoke({"query": "compare managed Postgres providers on price and limits"})
+for group in result["data"]["search_results"]:
+    print(group["query"], len(group["results"]))
+```
+
+### News Search (`OctenNewsSearch`)
+
+Recent articles plus `data.subjects`: storylines with a summary and the time span they cover.
+Domain filters narrow the ranked articles only, not the storylines.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (1-100), `subjects` (e.g. `{"enable": True, "count": 2, "max_sub_news": 5}`), `highlight`, `full_content`, `timeout` |
+
+```python
+tool = OctenNewsSearch(count=5)
+result = tool.invoke({"query": "EU AI Act enforcement", "time_range": "week"})
+for storyline in result["data"].get("subjects", []):
+    print(storyline["name"], storyline.get("summary"))
+```
+
+### Business Search (`OctenBusinessSearch`)
+
+Company and person cards in `data.entities` (profile, financial and stock metrics, key
+people, career history, recent announcements) plus the ranked sources in `data.results`.
+The domain, time and language filters narrow the ranked sources only, never the cards.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (1-100), `entities` (e.g. `{"count": 2, "max_news": 5}`), `highlight`, `full_content`, `timeout` |
+
+```python
+tool = OctenBusinessSearch(entities={"count": 2})
+result = tool.invoke({"query": "compare Stripe and Adyen"})
+for entity in result["data"].get("entities", []):
+    print(entity["name"])
+```
+
+### Pulse Search (`OctenPulseSearch`)
+
+Predicts the URL a query most likely means, in about 10ms: official docs, API references,
+help centres, sites you could almost name. It takes no filters and sees no fresh content.
+In `lite` mode (the server default) URLs come back without a scheme, e.g. `github.com/docs`.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query` | `count` (1-10), `mode` (`"lite"` or `"standard"`), `highlight`, `full_content` (both only in `standard`), `timeout` |
+
+```python
+tool = OctenPulseSearch(count=3)
+result = tool.invoke({"query": "uv documentation"})
+print([r["url"] for r in result["data"]["results"]])
+```
+
+### Place Search (`OctenPlaceSearch`)
+
+Real-world places as cards in `data.places`: name, category, address, coordinates, phone,
+website, opening hours, status, rating and review count. With `latitude` and `longitude` each
+card carries its `distance` in metres. When the place engine does not answer in time the
+result carries `"warning": "places_unavailable"`.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `latitude` + `longitude` (both or neither), `radius` (1-50000 m, needs a point), `user_location` (`city`, `region`, `country`, `timezone`) | `places` (e.g. `{"count": 5, "max_reviews": 0}`), `web_search` (e.g. `{"enable": True, "count": 3}`; off by default), `timeout` |
+
+```python
+tool = OctenPlaceSearch(places={"count": 5})
+result = tool.invoke(
+    {"query": "coffee shops", "latitude": 35.6812, "longitude": 139.7671, "radius": 1000}
+)
+for place in result["data"].get("places", []):
+    print(place["name"], place.get("distance"))
+```
+
+The tool sets `user_location.type` to `"approximate"` itself.
+
+## Retries
+
+The tools create their `octen` clients with `retry_after_send=False`: a request that times
+out or loses its connection after it may already have reached the server is not retried,
+because the first attempt may already have been served and billed. Failures known to happen
+before sending are still retried, and so are 408, 429, 500, 502, 503 and 504 responses.
+Those status-code retries can still be charged twice: a gateway may return 502 or 504 after
+the backend has finished. If you also call the API with your own `octen.Octen` /
+`octen.AsyncOcten` client, consider passing `retry_after_send=False` there too.
+
 ## Configuration
+
+Constructor options of `OctenSearchResults`:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `octen_api_key` | `str` | env `OCTEN_API_KEY` | Octen API key |
 | `max_results` | `int` | `5` | Number of results (1-100) |
-| `search_type` | `str` | `None` | `auto`, `keyword`, or `semantic` |
+| `search_type` | `str` | `None` | Deprecated and ignored (emits `FutureWarning`); the API no longer accepts it |
 | `include_domains` | `list[str]` | `None` | Restrict to these domains |
 | `exclude_domains` | `list[str]` | `None` | Exclude these domains |
 | `include_text` | `list[str]` | `None` | Text that must appear in results |
@@ -144,7 +313,7 @@ poetry install --with test,dev
 # Run unit tests (no API key needed)
 make test
 
-# Run integration tests (requires OCTEN_API_KEY)
+# Run live tests against the API (billed; requires OCTEN_API_KEY, sets OCTEN_LIVE=1)
 export OCTEN_API_KEY="your-api-key"
 make integration_tests
 

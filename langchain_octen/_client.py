@@ -1,0 +1,76 @@
+"""Octen SDK client construction and error routing shared by the tools."""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
+import octen
+from pydantic import SecretStr
+
+
+def resolve_api_key(explicit: Optional[SecretStr]) -> SecretStr:
+    """Return the explicit key, else ``OCTEN_API_KEY`` from the environment."""
+    if explicit is not None and explicit.get_secret_value():
+        return explicit
+    env_key = os.environ.get("OCTEN_API_KEY", "")
+    if not env_key:
+        raise ValueError(
+            "OCTEN_API_KEY must be provided as a parameter or set as an environment variable."
+        )
+    return SecretStr(env_key)
+
+
+def sync_client(api_key: SecretStr) -> octen.Octen:
+    """Create a sync client that does not retry a timeout or dropped connection after sending.
+
+    Such a request may already have been served and billed. octen still retries
+    failures before sending and 408/429/5xx responses.
+    """
+    return octen.Octen(api_key=api_key.get_secret_value(), retry_after_send=False)
+
+
+def async_client(api_key: SecretStr) -> octen.AsyncOcten:
+    """Async twin of :func:`sync_client`."""
+    return octen.AsyncOcten(api_key=api_key.get_secret_value(), retry_after_send=False)
+
+
+MAY_HAVE_BEEN_SENT = (
+    "The request may already have reached the server and been billed, so do not retry it "
+    "automatically."
+)
+
+
+def classify(exc: Exception) -> Optional[str]:
+    """Return the message to hand to the model, or ``None`` if ``exc`` must be raised.
+
+    Transient failures, server-side rejections of model-supplied values and 2xx
+    responses that carry an error envelope or a malformed body go to the model;
+    configuration problems (bad key, no access, invalid developer options) and anything
+    unrecognised are raised so the developer sees them.
+    """
+    if isinstance(exc, (octen.OctenTimeoutError, octen.OctenConnectionError)):
+        # request_sent is None when octen could not tell; treat that as possibly sent.
+        if getattr(exc, "request_sent", None) is False:
+            return str(exc)
+        return f"{exc}. {MAY_HAVE_BEEN_SENT}"
+    if isinstance(exc, octen.OctenRateLimitError):
+        return str(exc)
+    if isinstance(exc, octen.OctenAPIError):
+        status = exc.status_code
+        if status is None:
+            return None
+        if 200 <= status <= 299:
+            # An error envelope that reports an auth or access failure is still a config error.
+            data = exc.response_data
+            code = data.get("code") if isinstance(data, dict) else None
+            if code in (401, 403):
+                return None
+            # The server answered, so the call may have been served and billed.
+            return f"{exc}. {MAY_HAVE_BEEN_SENT}"
+        if status in (502, 504):
+            # A gateway can answer after the backend served (and billed) the call.
+            return f"{exc}. {MAY_HAVE_BEEN_SENT}"
+        if 500 <= status <= 599 or status in (400, 408, 422):
+            return str(exc)
+    return None

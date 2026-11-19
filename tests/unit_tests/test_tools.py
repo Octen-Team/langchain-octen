@@ -82,7 +82,7 @@ class TestOctenSearchAPIWrapper:
         wrapper = OctenSearchAPIWrapper(octen_api_key=SecretStr(FAKE_API_KEY))
         results = wrapper.results("Python programming")
 
-        mock_octen_cls.assert_called_once_with(api_key=FAKE_API_KEY)
+        mock_octen_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
         mock_client.search.search.assert_called_once()
         mock_client.close.assert_called_once()
         assert len(results) == 2
@@ -99,7 +99,7 @@ class TestOctenSearchAPIWrapper:
         wrapper = OctenSearchAPIWrapper(octen_api_key=SecretStr(FAKE_API_KEY))
         results = await wrapper.results_async("Python programming")
 
-        mock_async_cls.assert_called_once_with(api_key=FAKE_API_KEY)
+        mock_async_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
         mock_client.search.search.assert_called_once()
         mock_client.close.assert_called_once()
         assert len(results) == 2
@@ -113,7 +113,6 @@ class TestOctenSearchAPIWrapper:
         wrapper = OctenSearchAPIWrapper(
             octen_api_key=SecretStr(FAKE_API_KEY),
             max_results=3,
-            search_type="semantic",
             include_domains=["example.com"],
             safesearch="off",
             format="markdown",
@@ -121,7 +120,6 @@ class TestOctenSearchAPIWrapper:
         kwargs = wrapper._build_search_kwargs("test", exclude_domains=["bad.com"])
         assert kwargs["query"] == "test"
         assert kwargs["count"] == 3
-        assert kwargs["search_type"] == "semantic"
         assert kwargs["include_domains"] == ["example.com"]
         assert kwargs["exclude_domains"] == ["bad.com"]
         assert kwargs["safesearch"] == "off"
@@ -291,11 +289,9 @@ class TestOctenSearchResults:
         tool = OctenSearchResults(
             octen_api_key=SecretStr(FAKE_API_KEY),
             max_results=10,
-            search_type="keyword",
             safesearch="off",
         )
         assert tool.api_wrapper.max_results == 10
-        assert tool.api_wrapper.search_type == "keyword"
         assert tool.api_wrapper.safesearch == "off"
 
     @patch("octen.Octen")
@@ -348,3 +344,85 @@ class TestOctenSearchResults:
         await tool._arun(
             "test", include_domains=["example.com"], exclude_domains=["bad.com"]
         )
+
+
+# ---------------------------------------------------------------------------
+# search_type deprecation and client construction
+# ---------------------------------------------------------------------------
+
+
+class TestSearchTypeDeprecation:
+    @patch("octen.Octen")
+    def test_search_type_is_ignored_with_future_warning(
+        self, mock_octen_cls: MagicMock
+    ) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        with pytest.warns(FutureWarning, match="search_type") as record:
+            tool = OctenSearchResults(
+                octen_api_key=SecretStr(FAKE_API_KEY), search_type="semantic"
+            )
+        deprecations = [w for w in record if issubclass(w.category, FutureWarning)]
+        assert len(deprecations) == 1
+        assert deprecations[0].filename == __file__
+        tool.invoke({"query": "test"})
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert "search_type" not in call_kwargs
+
+    def test_wrapper_search_type_warns(self) -> None:
+        with pytest.warns(FutureWarning, match="search_type") as record:
+            wrapper = OctenSearchAPIWrapper(
+                octen_api_key=SecretStr(FAKE_API_KEY), search_type="semantic"
+            )
+        assert record[0].filename == __file__
+        assert "search_type" not in wrapper._build_search_kwargs("test")
+
+    def test_no_warning_without_search_type(self, recwarn: pytest.WarningsRecorder) -> None:
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
+
+    @patch("octen.Octen")
+    def test_existing_tool_client_disables_retry_after_send(
+        self, mock_octen_cls: MagicMock
+    ) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY)).invoke({"query": "test"})
+
+        mock_octen_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_existing_tool_async_client_disables_retry_after_send(
+        self, mock_async_cls: MagicMock
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        await OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY)).ainvoke(
+            {"query": "test"}
+        )
+
+        mock_async_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+
+    def test_unknown_kwarg_still_ignored(self) -> None:
+        # 0.1 behaviour of the old tool is kept: unknown constructor kwargs are ignored.
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), max_resutls=3)
+
+    @patch("octen.Octen")
+    def test_unknown_model_arg_still_ignored(self, mock_octen_cls: MagicMock) -> None:
+        # The old octen_search schema keeps ignoring unknown arguments, as in 0.1.
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY))
+        results = tool.invoke({"query": "test", "include_domain": ["a.com"]})
+
+        assert isinstance(results, list) and len(results) == 2

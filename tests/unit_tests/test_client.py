@@ -1,0 +1,135 @@
+"""Unit tests for the shared client factories and error routing."""
+
+from __future__ import annotations
+
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
+import pytest
+from octen import (
+    OctenAPIError,
+    OctenAuthenticationError,
+    OctenConnectionError,
+    OctenRateLimitError,
+    OctenTimeoutError,
+    OctenValidationError,
+)
+from pydantic import SecretStr
+
+from langchain_octen._client import (
+    MAY_HAVE_BEEN_SENT,
+    async_client,
+    classify,
+    resolve_api_key,
+    sync_client,
+)
+
+FAKE_API_KEY = "test-api-key-12345"
+
+
+@patch("octen.Octen")
+def test_sync_client_disables_retry_after_send(mock_octen_cls: MagicMock) -> None:
+    client = sync_client(SecretStr(FAKE_API_KEY))
+    mock_octen_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+    assert client is mock_octen_cls.return_value
+
+
+@patch("octen.AsyncOcten")
+def test_async_client_disables_retry_after_send(mock_async_cls: MagicMock) -> None:
+    client = async_client(SecretStr(FAKE_API_KEY))
+    mock_async_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+    assert client is mock_async_cls.return_value
+
+
+def test_resolve_api_key_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTEN_API_KEY", "from-env")
+    assert resolve_api_key(SecretStr(FAKE_API_KEY)).get_secret_value() == FAKE_API_KEY
+
+
+def test_resolve_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTEN_API_KEY", "from-env")
+    assert resolve_api_key(None).get_secret_value() == "from-env"
+
+
+def test_resolve_api_key_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCTEN_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OCTEN_API_KEY"):
+        resolve_api_key(None)
+
+
+@pytest.mark.parametrize(
+    ("exc", "to_model"),
+    [
+        (OctenAuthenticationError(), False),
+        (OctenAPIError("forbidden", status_code=403), False),
+        (OctenValidationError("bad count"), False),
+        (OctenAPIError("not found", status_code=404), False),
+        (OctenRateLimitError(), True),
+        (OctenAPIError("unavailable", status_code=503), True),
+        (OctenAPIError("bad request", status_code=400), True),
+        (OctenAPIError("unprocessable", status_code=422), True),
+        (OctenAPIError("request timeout", status_code=408), True),
+        (OctenAPIError("API returned code 500", status_code=200), True),
+        (OctenAPIError("malformed successful response", status_code=200), True),
+        (OctenAPIError("accepted with an error envelope", status_code=202), True),
+        (OctenAPIError("auth in envelope", status_code=200, response_data={"code": 401}), False),
+        (OctenAPIError("access in envelope", status_code=200, response_data={"code": 403}), False),
+        (OctenAPIError("engine error", status_code=200, response_data={"code": 500}), True),
+        (OctenAPIError("conflict", status_code=409), False),
+        (OctenAPIError("no status"), False),
+        (OctenTimeoutError(), True),
+        (OctenConnectionError(), True),
+    ],
+)
+def test_classify(exc: Exception, to_model: bool) -> None:
+    message: Optional[str] = classify(exc)
+    if to_model:
+        assert message is not None
+        assert str(exc) in message
+    else:
+        assert message is None
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("API returned code 500", status_code=200),
+        OctenAPIError("malformed successful response", status_code=200),
+        OctenAPIError("engine error", status_code=202, response_data={"code": 500}),
+    ],
+    ids=repr,
+)
+def test_failed_2xx_warns_against_retry(exc: Exception) -> None:
+    message = classify(exc)
+    assert message is not None
+    assert str(exc) in message
+    assert MAY_HAVE_BEEN_SENT in message
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("internal error", status_code=500),
+        OctenAPIError("unavailable", status_code=503),
+        OctenAPIError("bad request", status_code=400),
+        OctenRateLimitError(),
+    ],
+    ids=repr,
+)
+def test_non_2xx_model_errors_keep_plain_message(exc: Exception) -> None:
+    assert classify(exc) == str(exc)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("bad gateway", status_code=502),
+        OctenAPIError("gateway timeout", status_code=504),
+    ],
+    ids=repr,
+)
+def test_gateway_errors_warn_against_retry(exc: Exception) -> None:
+    message = classify(exc)
+    assert message is not None
+    assert str(exc) in message
+    assert MAY_HAVE_BEEN_SENT in message

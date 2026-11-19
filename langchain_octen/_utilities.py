@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, SecretStr, model_validator
+
+from langchain_octen._client import async_client, sync_client
+
+SEARCH_TYPE_DEPRECATION = (
+    "search_type is ignored: the Octen API no longer accepts it. "
+    "It will be removed in a future release."
+)
 
 
 class OctenSearchAPIWrapper(BaseModel):
@@ -33,6 +41,11 @@ class OctenSearchAPIWrapper(BaseModel):
     full_content_max_tokens: Optional[int] = None
     timeout: Optional[float] = None
 
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+        if self.search_type is not None:
+            warnings.warn(SEARCH_TYPE_DEPRECATION, FutureWarning, stacklevel=2)
+
     @model_validator(mode="before")
     @classmethod
     def validate_environment(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -55,10 +68,8 @@ class OctenSearchAPIWrapper(BaseModel):
         exclude_domains: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Build kwargs dict for the SDK search call."""
+        # search_type is deliberately not forwarded: octen>=0.5 rejects it.
         kwargs: Dict[str, Any] = {"query": query, "count": self.max_results}
-
-        if self.search_type is not None:
-            kwargs["search_type"] = self.search_type
 
         # Merge per-call domain filters with instance defaults
         inc = include_domains or self.include_domains
@@ -122,12 +133,10 @@ class OctenSearchAPIWrapper(BaseModel):
         exclude_domains: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute a synchronous search and return cleaned results."""
-        from octen import Octen
-
         kwargs = self._build_search_kwargs(
             query, include_domains=include_domains, exclude_domains=exclude_domains
         )
-        client = Octen(api_key=self.octen_api_key.get_secret_value())
+        client = sync_client(self.octen_api_key)
         try:
             response = client.search.search(**kwargs)
             return self._format_results(response.results)
@@ -142,12 +151,10 @@ class OctenSearchAPIWrapper(BaseModel):
         exclude_domains: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute an asynchronous search and return cleaned results."""
-        from octen import AsyncOcten
-
         kwargs = self._build_search_kwargs(
             query, include_domains=include_domains, exclude_domains=exclude_domains
         )
-        client = AsyncOcten(api_key=self.octen_api_key.get_secret_value())
+        client = async_client(self.octen_api_key)
         try:
             response = await client.search.search(**kwargs)
             return self._format_results(response.results)
