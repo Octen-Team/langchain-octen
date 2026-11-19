@@ -142,8 +142,10 @@ results = tool.invoke({"query": "Python documentation"})
 
 - **Errors are split by who can fix them.**
   - Raised to your code: authentication failure (`octen.OctenAuthenticationError`, 401),
-    no access or insufficient balance (`octen.OctenAPIError` with status 403), other 4xx
-    responses, and invalid constructor options (`octen.OctenValidationError`, e.g. `count=1000`).
+    no access or insufficient balance (`octen.OctenAPIError` with status 403) and other 4xx
+    responses.
+  - Constructor options are checked when the tool is built: an out-of-range value
+    (`count=1000`) or a misspelt option name (`max_querys=3`) raises `ValueError` naming it.
   - Handed to the model as the tool result (a `ToolException` with `handle_tool_error=True`):
     rate limits (429), server errors (5xx), 400/422 responses, timeouts and connection errors.
   - Invalid model arguments (an unknown `time_range`, half a coordinate pair, a `radius`

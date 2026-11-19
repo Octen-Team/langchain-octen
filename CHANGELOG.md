@@ -13,9 +13,11 @@
     `max_queries`, Pulse `mode`, News `subjects`, Business `entities`, Place `places` and
     `web_search`, and `timeout` are constructor options.
   - Each call returns `{"data", "request_id", "warning"}`; `warning` is omitted when empty.
-  - Authentication failures, 403, other 4xx responses and invalid constructor options are
-    raised; rate limits, 5xx, 400/422, timeouts and connection errors are returned to the
-    model. Invalid model arguments are rejected before any request is made.
+  - Constructor options are validated when the tool is built: an out-of-range value or an
+    unknown option name raises `ValueError`.
+  - Authentication failures, 403 and other 4xx responses are raised; rate limits, 5xx,
+    400/422, timeouts and connection errors are returned to the model. Invalid model
+    arguments are rejected before any request is made.
 - CI on Python 3.9-3.13, LangChain standard tool tests, and opt-in live tests
   (`OCTEN_LIVE=1`).
 

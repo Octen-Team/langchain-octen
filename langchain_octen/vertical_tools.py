@@ -9,12 +9,21 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
 
+import octen
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
 from langchain_core.tools import BaseTool, ToolException
-from pydantic import BaseModel, Field, SecretStr, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 from typing_extensions import Annotated
 
 from langchain_octen._client import async_client, classify, resolve_api_key, sync_client
@@ -29,17 +38,25 @@ _LANGUAGE_DESCRIPTION = (
 )
 
 
-def _format_validation_error(exc: Exception) -> str:
-    """Tell the model which argument was wrong, so it can retry with a fixed call."""
+def _describe_errors(exc: Exception) -> str:
     errors = getattr(exc, "errors", None)
     if not callable(errors):
-        return f"Invalid tool input: {exc}"
+        return str(exc)
     parts = []
     for err in errors():
         loc = ".".join(str(p) for p in err.get("loc", ()))
         msg = str(err.get("msg", "invalid value"))
         parts.append(f"{loc}: {msg}" if loc else msg)
-    return "Invalid tool input: " + "; ".join(parts)
+    return "; ".join(parts)
+
+
+def _format_validation_error(exc: Exception) -> str:
+    """Tell the model which argument was wrong, so it can retry with a fixed call."""
+    return "Invalid tool input: " + _describe_errors(exc)
+
+
+# Stands in for the model's query when developer options are checked at construction.
+_PLACEHOLDER_QUERY = "placeholder"
 
 
 class OctenFilteredSearchInput(BaseModel):
@@ -130,6 +147,9 @@ class OctenPlaceSearchInput(BaseModel):
 class _OctenVerticalTool(BaseTool):
     """Shared key handling, client lifecycle, result shape and error routing."""
 
+    # A misspelt option would otherwise be ignored and silently fall back to the server default.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
     handle_tool_error: bool = True
     handle_validation_error: Union[bool, str, Any] = _format_validation_error
 
@@ -140,6 +160,20 @@ class _OctenVerticalTool(BaseTool):
 
     _sdk_method: ClassVar[Tuple[str, str]]
     _developer_options: ClassVar[Tuple[str, ...]]
+    _request_model: ClassVar[Any]
+
+    @model_validator(mode="after")
+    def _check_developer_options(self) -> "_OctenVerticalTool":
+        options = {key: getattr(self, key) for key in self._developer_options}
+        try:
+            self._build_request_model(options)
+        except ValidationError as exc:
+            raise ValueError(f"invalid {self.name} option: {_describe_errors(exc)}") from None
+        return self
+
+    def _build_request_model(self, options: Dict[str, Any]) -> None:
+        """Build the request model octen will build, so bad options fail here, not per call."""
+        self._request_model(query=_PLACEHOLDER_QUERY, **options)
 
     @model_validator(mode="before")
     @classmethod
@@ -282,6 +316,13 @@ class OctenBroadSearch(_OctenVerticalTool):
         "full_content",
         "max_queries",
     )
+    _request_model: ClassVar[Any] = octen.BroadSearchRequest
+
+    def _build_request_model(self, options: Dict[str, Any]) -> None:
+        # Same two steps as octen's broad_search: per-sub-query options, then the request.
+        search_options = {k: v for k, v in options.items() if k != "max_queries"}
+        octen.SearchOptions(**search_options)
+        self._request_model(query=_PLACEHOLDER_QUERY, max_queries=options["max_queries"])
 
 
 class OctenNewsSearch(_OctenVerticalTool):
@@ -324,6 +365,7 @@ class OctenNewsSearch(_OctenVerticalTool):
     """Storyline options, e.g. ``{"enable": True, "count": 2, "max_sub_news": 5}``."""
 
     _sdk_method: ClassVar[Tuple[str, str]] = ("search", "news_search")
+    _request_model: ClassVar[Any] = octen.NewsSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = (
         "count",
         "highlight",
@@ -376,6 +418,7 @@ class OctenBusinessSearch(_OctenVerticalTool):
     """Card options, e.g. ``{"enable": True, "count": 2, "max_news": 5}``."""
 
     _sdk_method: ClassVar[Tuple[str, str]] = ("search", "business_search")
+    _request_model: ClassVar[Any] = octen.BusinessSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = (
         "count",
         "highlight",
@@ -420,10 +463,11 @@ class OctenPulseSearch(_OctenVerticalTool):
     """Highlight options; no effect in ``lite`` mode."""
     full_content: Optional[Dict[str, Any]] = None
     """Full content options; no effect in ``lite`` mode."""
-    mode: Optional[str] = None
+    mode: Optional[Literal["lite", "standard"]] = None
     """``"lite"`` or ``"standard"``. Unset uses the server default (``lite``)."""
 
     _sdk_method: ClassVar[Tuple[str, str]] = ("search", "pulse_search")
+    _request_model: ClassVar[Any] = octen.PulseSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = (
         "count",
         "highlight",
@@ -474,6 +518,7 @@ class OctenPlaceSearch(_OctenVerticalTool):
     default."""
 
     _sdk_method: ClassVar[Tuple[str, str]] = ("place_search", "search")
+    _request_model: ClassVar[Any] = octen.PlaceSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = ("places", "web_search")
 
     def _request(self, model_args: Dict[str, Any]) -> Dict[str, Any]:

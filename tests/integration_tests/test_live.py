@@ -10,7 +10,7 @@ import os
 from typing import Any, Dict, List
 
 import pytest
-from octen import OctenAuthenticationError, OctenValidationError
+from octen import OctenAuthenticationError
 from octen.resources.search import SearchResource
 from pydantic import SecretStr
 
@@ -106,7 +106,6 @@ def test_bad_key_raises_authentication_error() -> None:
     print(f"\nbad key request_id={exc_info.value.request_id}")
 
 
-def test_out_of_range_developer_count_raises_validation_error() -> None:
-    tool = OctenNewsSearch(count=1000)
-    with pytest.raises(OctenValidationError):
-        tool.invoke({"query": "artificial intelligence regulation"})
+def test_out_of_range_developer_count_raises_at_construction() -> None:
+    with pytest.raises(ValueError, match="count"):
+        OctenNewsSearch(count=1000)

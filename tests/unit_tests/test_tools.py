@@ -410,3 +410,7 @@ class TestSearchTypeDeprecation:
         )
 
         mock_async_cls.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
+
+    def test_unknown_kwarg_still_ignored(self) -> None:
+        # 0.1 behaviour of the old tool is kept: unknown constructor kwargs are ignored.
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), max_resutls=3)

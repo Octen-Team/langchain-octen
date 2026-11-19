@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Tuple, Type
+from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import octen
@@ -386,7 +386,7 @@ async def test_async_uses_async_client_and_closes(case: Case, async_client: Magi
     response = _response(case)
     _sdk_method(client, case).return_value = response
 
-    result = await _tool(case, count=None, timeout=5.0).ainvoke({"query": "q"})
+    result = await _tool(case, timeout=5.0).ainvoke({"query": "q"})
 
     async_client.assert_called_once_with(api_key=FAKE_API_KEY, retry_after_send=False)
     _sdk_method(client, case).assert_awaited_once_with(query="q", timeout=5.0)
@@ -420,19 +420,55 @@ async def test_async_transient_error_goes_to_model(case: Case, async_client: Mag
 
 
 @pytest.mark.parametrize(
-    ("case", "options"),
+    ("case", "options", "bad_name"),
     [
-        (CASES[0], {"max_queries": 1000}),
-        (CASES[1], {"count": 1000}),
-        (CASES[2], {"entities": {"count": 1000}}),
-        (CASES[3], {"mode": "turbo"}),
-        (PLACE, {"places": {"count": 1000}}),
+        (CASES[0], {"max_queries": 1000}, "max_queries"),
+        (CASES[0], {"count": 1000}, "count"),
+        (CASES[0], {"highlight": {"max_tokens": 5}}, "highlight"),
+        (CASES[1], {"count": 1000}, "count"),
+        (CASES[1], {"subjects": {"count": 9}}, "subjects"),
+        (CASES[2], {"entities": {"count": 1000}}, "entities"),
+        (CASES[2], {"entities": {"bogus": 1}}, "entities"),
+        (CASES[3], {"count": 11}, "count"),
+        (CASES[3], {"mode": "turbo"}, "mode"),
+        (CASES[3], {"full_content": {"max_tokens": 5}}, "full_content"),
+        (PLACE, {"places": {"count": 1000}}, "places"),
+        (PLACE, {"web_search": {"time_range": "last week"}}, "web_search"),
     ],
-    ids=["broad-max_queries", "news-count", "business-entities", "pulse-mode", "place-places"],
+    ids=[
+        "broad-max_queries",
+        "broad-count",
+        "broad-highlight",
+        "news-count",
+        "news-subjects",
+        "business-entities-count",
+        "business-entities-unknown-key",
+        "pulse-count",
+        "pulse-mode",
+        "pulse-full_content",
+        "place-places",
+        "place-web_search",
+    ],
 )
-def test_invalid_developer_option_raises_from_real_sdk(
-    case: Case, options: Dict[str, Any]
+def test_invalid_developer_option_raises_at_construction(
+    case: Case, options: Dict[str, Any], bad_name: str, sync_client: MagicMock
 ) -> None:
-    # Real client: octen validates locally and raises before any request is made.
-    with pytest.raises(OctenValidationError):
-        _tool(case, **options).invoke({"query": "q"})
+    with pytest.raises(ValueError, match=bad_name):
+        _tool(case, **options)
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_valid_developer_options_accepted(case: Case) -> None:
+    _tool(case, timeout=10.0, **case.options)
+
+
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_unknown_constructor_kwarg_rejected(case: Case) -> None:
+    with pytest.raises(ValueError, match="max_querys"):
+        _tool(case, max_querys=3)
+
+
+def test_pulse_mode_is_enumerated() -> None:
+    annotation = OctenPulseSearch.model_fields["mode"].annotation
+    assert annotation == Optional[Literal["lite", "standard"]]
