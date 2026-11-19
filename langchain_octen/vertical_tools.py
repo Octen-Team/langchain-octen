@@ -239,6 +239,13 @@ class _OctenVerticalTool(BaseTool):
             explicit = values.get("octen_api_key")
             if isinstance(explicit, str):
                 explicit = SecretStr(explicit)
+            elif explicit is not None and not isinstance(explicit, SecretStr):
+                # pydantic echoes the input in its error, and the value may be a secret.
+                values["octen_api_key"] = "<redacted>"
+                raise ValueError(
+                    "octen_api_key must be a str or SecretStr, "
+                    f"got {type(explicit).__name__}"
+                )
             values["octen_api_key"] = resolve_api_key(explicit)
         return values
 

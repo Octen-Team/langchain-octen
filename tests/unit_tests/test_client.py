@@ -16,7 +16,13 @@ from octen import (
 )
 from pydantic import SecretStr
 
-from langchain_octen._client import async_client, classify, resolve_api_key, sync_client
+from langchain_octen._client import (
+    MAY_HAVE_BEEN_SENT,
+    async_client,
+    classify,
+    resolve_api_key,
+    sync_client,
+)
 
 FAKE_API_KEY = "test-api-key-12345"
 
@@ -82,3 +88,32 @@ def test_classify(exc: Exception, to_model: bool) -> None:
         assert str(exc) in message
     else:
         assert message is None
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("API returned code 500", status_code=200),
+        OctenAPIError("malformed successful response", status_code=200),
+        OctenAPIError("engine error", status_code=202, response_data={"code": 500}),
+    ],
+    ids=repr,
+)
+def test_failed_2xx_warns_against_retry(exc: Exception) -> None:
+    message = classify(exc)
+    assert message is not None
+    assert str(exc) in message
+    assert MAY_HAVE_BEEN_SENT in message
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAPIError("unavailable", status_code=503),
+        OctenAPIError("bad request", status_code=400),
+        OctenRateLimitError(),
+    ],
+    ids=repr,
+)
+def test_non_2xx_model_errors_keep_plain_message(exc: Exception) -> None:
+    assert classify(exc) == str(exc)

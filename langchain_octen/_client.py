@@ -63,7 +63,10 @@ def classify(exc: Exception) -> Optional[str]:
             # An error envelope that reports an auth or access failure is still a config error.
             data = exc.response_data
             code = data.get("code") if isinstance(data, dict) else None
-            return None if code in (401, 403) else str(exc)
+            if code in (401, 403):
+                return None
+            # The server answered, so the call may have been served and billed.
+            return f"{exc}. {MAY_HAVE_BEEN_SENT}"
         if 500 <= status <= 599 or status in (400, 408, 422):
             return str(exc)
     return None

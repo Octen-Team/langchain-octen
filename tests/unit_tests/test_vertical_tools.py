@@ -713,3 +713,22 @@ def test_developer_option_dicts_are_copied(case: Case, sync_client: MagicMock) -
     _, kwargs = _sdk_method(client, case).call_args
     for key, value in expected.items():
         assert kwargs[key] == value
+
+
+@pytest.mark.parametrize("bad_key", [12345, 1.5, ["k"], {"key": "k"}, b"k"], ids=repr)
+@pytest.mark.parametrize("case", CASES, ids=_ids)
+def test_non_string_key_rejected(case: Case, bad_key: Any) -> None:
+    with pytest.raises(ValueError, match="octen_api_key") as exc_info:
+        case.tool_cls(octen_api_key=bad_key)
+    assert repr(bad_key) not in str(exc_info.value)
+
+
+def test_failed_2xx_hint_reaches_model(sync_client: MagicMock) -> None:
+    case = CASES[1]
+    exc = OctenAPIError("malformed successful response", status_code=200)
+    _sdk_method(sync_client.return_value, case).side_effect = exc
+
+    result = _tool(case).invoke({"query": "q"})
+
+    assert isinstance(result, str)
+    assert MAY_HAVE_BEEN_SENT in result
