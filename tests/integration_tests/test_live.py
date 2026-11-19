@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List
 
+import octen
 import pytest
 from octen import OctenAuthenticationError
 from octen.resources.search import SearchResource
@@ -21,12 +22,39 @@ from langchain_octen import (
     OctenPlaceSearch,
     OctenPulseSearch,
     OctenSearchResults,
+    _utilities,
+    vertical_tools,
 )
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OCTEN_LIVE") != "1" or not os.environ.get("OCTEN_API_KEY"),
     reason="set OCTEN_LIVE=1 and OCTEN_API_KEY to run live tests",
 )
+
+
+@pytest.fixture(autouse=True)
+def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
+    """Bill each live test at most once: the tools' clients get max_retries=0 here only."""
+    created: List[str] = []
+
+    def sync_client(api_key: SecretStr) -> octen.Octen:
+        created.append("sync")
+        return octen.Octen(
+            api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
+        )
+
+    def async_client(api_key: SecretStr) -> octen.AsyncOcten:
+        created.append("async")
+        return octen.AsyncOcten(
+            api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
+        )
+
+    for module in (vertical_tools, _utilities):
+        monkeypatch.setattr(module, "sync_client", sync_client)
+        monkeypatch.setattr(module, "async_client", async_client)
+    yield
+    if request.node.name != "test_out_of_range_developer_count_raises_at_construction":
+        assert created, "the tool did not use the patched client factory"
 
 
 def _check(name: str, result: Any) -> None:
@@ -68,10 +96,13 @@ def test_broad_search() -> None:
 
 
 def test_news_search() -> None:
-    tool = OctenNewsSearch(count=1)
+    tool = OctenNewsSearch(count=1, subjects={"enable": True, "count": 1})
     result = tool.invoke({"query": "artificial intelligence regulation", "time_range": "month"})
     _check(tool.name, result)
     assert result["data"]["results"], result
+    storylines = result["data"].get("subjects") or []
+    assert any(s.get("name") for s in storylines), storylines
+    print(f"octen_news_search storylines={[s.get('name') for s in storylines]}")
 
 
 @pytest.mark.asyncio
@@ -80,8 +111,6 @@ async def test_business_search_async() -> None:
     result = await tool.ainvoke({"query": "NVIDIA company overview"})
     _check(tool.name, result)
     entities = result["data"].get("entities") or []
-    if not entities:
-        pytest.skip("no entity card returned for NVIDIA; cannot check card content")
     assert any(entity.get("name") for entity in entities), entities
     print(f"octen_business_search entity names={[e.get('name') for e in entities]}")
 
