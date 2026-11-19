@@ -22,9 +22,10 @@ def resolve_api_key(explicit: Optional[SecretStr]) -> SecretStr:
 
 
 def sync_client(api_key: SecretStr) -> octen.Octen:
-    """Create a sync client that does not retry a request once it may have been sent.
+    """Create a sync client that does not retry a timeout or dropped connection after sending.
 
-    A retried request that already reached the server can be billed twice.
+    Such a request may already have been served and billed. octen still retries
+    failures before sending and 408/429/5xx responses.
     """
     return octen.Octen(api_key=api_key.get_secret_value(), retry_after_send=False)
 

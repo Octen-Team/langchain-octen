@@ -268,12 +268,13 @@ The tool sets `user_location.type` to `"approximate"` itself.
 
 ## Retries
 
-The tools create their `octen` clients with `retry_after_send=False`: a request that fails
-after it may already have reached the server (a client-side timeout, a connection dropped
-mid-response) is not retried, because the first attempt may already have been served and
-billed. Failures known to happen before sending, and 408/429/5xx responses, are still retried.
-If you also call the API with your own `octen.Octen` / `octen.AsyncOcten` client, consider
-passing `retry_after_send=False` there too.
+The tools create their `octen` clients with `retry_after_send=False`: a request that times
+out or loses its connection after it may already have reached the server is not retried,
+because the first attempt may already have been served and billed. Failures known to happen
+before sending are still retried, and so are 408, 429, 500, 502, 503 and 504 responses.
+Those status-code retries can still be charged twice: a gateway may return 502 or 504 after
+the backend has finished. If you also call the API with your own `octen.Octen` /
+`octen.AsyncOcten` client, consider passing `retry_after_send=False` there too.
 
 ## Configuration
 

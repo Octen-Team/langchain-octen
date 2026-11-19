@@ -33,12 +33,13 @@
 
 ### Changed
 
-- Clients are created with `retry_after_send=False`: a request that fails after it may have
-  reached the server (client-side timeout, connection dropped mid-response) is no longer
-  retried, so it cannot be billed twice. Requests that never left the client and 408 / 429 /
-  5xx responses are still retried. This also applies to the existing `octen_search` tool
-  (`OctenSearchResults` and `OctenSearchAPIWrapper`): it no longer retries a request after it
-  has been sent, as it did in 0.1.
+- Clients are created with `retry_after_send=False`: a request that times out or loses its
+  connection after it may have reached the server is no longer retried. Requests that never
+  left the client are still retried, and so are 408, 429, 500, 502, 503 and 504 responses;
+  those status-code retries can still lead to a second charge (a gateway may return 502 or
+  504 after the backend finished). This also applies to the existing `octen_search` tool
+  (`OctenSearchResults` and `OctenSearchAPIWrapper`): it no longer retries a request that
+  timed out or lost its connection after being sent, as it did in 0.1.
 - `octen_search` has a reworded tool description; its parameters are unchanged.
 - Requires `octen>=0.12.0,<1.0.0`.
 
