@@ -1,7 +1,9 @@
 """The requests the existing tools send stay unchanged across releases.
 
-The expected bodies were recorded from the 0.2.0 code with the same inputs; a change
-here means a 0.2.0 tool now sends a different request.
+EXPECTED was captured by running _capture_sync() on langchain-octen 0.2.0
+(origin/main 20e047e) with octen 0.12.0, the version its poetry.lock pins; this branch
+runs the same inputs with octen 0.13.0. A difference means a 0.2.0 tool now sends a
+different request, whether from this package or from the octen upgrade.
 """
 
 from __future__ import annotations
@@ -92,7 +94,7 @@ def _tools() -> List[Tuple[Any, Dict[str, Any]]]:
     ]
 
 
-# Recorded from langchain-octen 0.2.0 (origin/main 20e047e) with octen 0.13.0.
+# Captured from langchain-octen 0.2.0 (20e047e) with octen 0.12.0; see the module docstring.
 EXPECTED: Dict[str, Call] = {
     "octen_search": (
         "POST",
