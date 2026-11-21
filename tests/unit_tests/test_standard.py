@@ -17,6 +17,7 @@ from langchain_octen import (  # noqa: E402
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
     OctenSearchResults,
 )
 
@@ -89,6 +90,16 @@ class TestOctenPulseSearchStandard(_OctenVerticalStandardTests):
     @property
     def tool_invoke_params_example(self) -> Dict[str, Any]:
         return {"query": "github docs"}
+
+
+class TestOctenSearchPremierStandard(_OctenVerticalStandardTests):
+    @property
+    def tool_constructor(self) -> Type[BaseTool]:
+        return OctenSearchPremier
+
+    @property
+    def tool_invoke_params_example(self) -> Dict[str, Any]:
+        return {"query": "Kafka default retention period", "include_domains": ["apache.org"]}
 
 
 class TestOctenPlaceSearchStandard(_OctenVerticalStandardTests):

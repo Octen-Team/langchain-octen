@@ -28,10 +28,27 @@ from langchain_octen import (
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
 )
 
 FAKE_API_KEY = "test-api-key-12345"
 FILTER_ARGS = frozenset({"query", "include_domains", "exclude_domains", "time_range", "language"})
+PREMIER_ARGS = frozenset({"query", "include_domains", "exclude_domains"})
+PREMIER_OPTIONS: Dict[str, Any] = {
+    "count": 3,
+    "result_type": "dynamic",
+    "highlight": {"enable": True, "max_tokens": 600},
+    "full_content": {"enable": True, "max_tokens": 1000},
+    "include_text": ["kafka"],
+    "exclude_text": ["ads"],
+    "language": ["en", "de"],
+    "time_basis": "published",
+    "start_time": "2025-01-01T00:00:00Z",
+    "end_time": "2025-06-30T23:59:59+08:00",
+    "format": "markdown",
+    "safesearch": "off",
+    "include_images": True,
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +99,14 @@ CASES = [
          "mode": "standard"},
     ),
     Case(
+        OctenSearchPremier,
+        "octen_search_premier",
+        ("search", "search_premier"),
+        octen.SearchResponse,
+        PREMIER_ARGS,
+        PREMIER_OPTIONS,
+    ),
+    Case(
         OctenPlaceSearch,
         "octen_place_search",
         ("place_search", "search"),
@@ -92,6 +117,7 @@ CASES = [
 ]
 FILTERED_CASES = [c for c in CASES if c.model_args == FILTER_ARGS]
 PLACE = CASES[-1]
+PREMIER = CASES[4]
 
 
 def _ids(case: Case) -> str:
@@ -133,6 +159,7 @@ def test_tool_names() -> None:
         "octen_news_search",
         "octen_business_search",
         "octen_pulse_search",
+        "octen_search_premier",
         "octen_place_search",
     ]
 
@@ -437,6 +464,21 @@ async def test_async_transient_error_goes_to_model(case: Case, async_client: Mag
         (CASES[3], {"count": 11}, "count"),
         (CASES[3], {"mode": "turbo"}, "mode"),
         (CASES[3], {"full_content": {"max_tokens": 5}}, "full_content"),
+        (PREMIER, {"count": 0}, "count"),
+        (PREMIER, {"count": 101}, "count"),
+        (PREMIER, {"result_type": "smart"}, "result_type"),
+        (PREMIER, {"highlight": {"max_tokens": 99}}, "highlight"),
+        (PREMIER, {"full_content": {"max_tokens": 100001}}, "full_content"),
+        (PREMIER, {"full_content": {"enabled": True}}, "full_content"),
+        (PREMIER, {"include_text": ["a"] * 6}, "include_text"),
+        (PREMIER, {"exclude_text": ["x" * 31]}, "exclude_text"),
+        (PREMIER, {"language": ["english"]}, "language"),
+        (PREMIER, {"time_basis": "indexed"}, "time_basis"),
+        (PREMIER, {"time_range": "last week"}, "time_range"),
+        (PREMIER, {"start_time": "last week"}, "start_time"),
+        (PREMIER, {"end_time": "2025-13-01T00:00:00Z"}, "end_time"),
+        (PREMIER, {"format": "html"}, "format"),
+        (PREMIER, {"safesearch": "moderate"}, "safesearch"),
         (PLACE, {"places": {"count": 1000}}, "places"),
         (PLACE, {"web_search": {"time_range": "last week"}}, "web_search"),
     ],
@@ -451,6 +493,21 @@ async def test_async_transient_error_goes_to_model(case: Case, async_client: Mag
         "pulse-count",
         "pulse-mode",
         "pulse-full_content",
+        "premier-count-0",
+        "premier-count-101",
+        "premier-result_type",
+        "premier-highlight",
+        "premier-full_content",
+        "premier-full_content-unknown-key",
+        "premier-include_text-too-many",
+        "premier-exclude_text-too-long",
+        "premier-language",
+        "premier-time_basis",
+        "premier-time_range",
+        "premier-start_time",
+        "premier-end_time",
+        "premier-format",
+        "premier-safesearch",
         "place-places",
         "place-web_search",
     ],
@@ -609,6 +666,7 @@ def test_valid_timeout_accepted(case: Case, timeout: Any) -> None:
         (CASES[2], {"query": "x", "count": 50}, "count"),
         (CASES[3], {"query": "x", "count": 10}, "count"),
         (CASES[3], {"query": "x", "language": ["en"]}, "language"),
+        (PREMIER, {"query": "x", "time_range": "week"}, "time_range"),
         (PLACE, {"query": "x", "lat": 35.0, "lng": 139.0}, "lat"),
         (PLACE, {"query": "x", "user_location": {"cty": "Tokyo"}}, "cty"),
     ],
@@ -618,6 +676,7 @@ def test_valid_timeout_accepted(case: Case, timeout: Any) -> None:
         "business-count",
         "pulse-count",
         "pulse-language",
+        "premier-time_range",
         "place-lat-lng",
         "place-user_location-cty",
     ],
@@ -807,3 +866,106 @@ def test_response_format_other_than_content_rejected(case: Case, sync_client: Ma
 @pytest.mark.parametrize("case", CASES, ids=_ids)
 def test_response_format_content_accepted(case: Case) -> None:
     assert _tool(case, response_format="content").response_format == "content"
+
+
+PREMIER_DEVELOPER_ONLY = [
+    {"count": 50},
+    {"result_type": "dynamic"},
+    {"highlight": {"enable": True, "max_tokens": 20000}},
+    {"full_content": {"enable": True}},
+    {"include_text": ["x"]},
+    {"exclude_text": ["x"]},
+    {"language": ["en"]},
+    {"time_basis": "crawled"},
+    {"time_range": "day"},
+    {"start_time": "2025-01-01T00:00:00Z"},
+    {"end_time": "2025-01-01T00:00:00Z"},
+    {"format": "markdown"},
+    {"safesearch": "off"},
+    {"include_images": True},
+    {"timeout": 1.0},
+]
+
+
+@pytest.mark.parametrize("extra", PREMIER_DEVELOPER_ONLY, ids=lambda e: next(iter(e)))
+def test_premier_model_cannot_set_developer_options(
+    extra: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    result = _tool(PREMIER).invoke({"query": "x", **extra})
+
+    assert isinstance(result, str)
+    assert next(iter(extra)) in result
+    sync_client.assert_not_called()
+
+
+def test_premier_model_filters_and_developer_options_forwarded(sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.search.search_premier.return_value = _response(PREMIER)
+
+    _tool(PREMIER, count=4, result_type="standard", time_range="year").invoke(
+        {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]}
+    )
+
+    client.search.search_premier.assert_called_once_with(
+        query="q",
+        include_domains=["a.com"],
+        exclude_domains=["b.com"],
+        count=4,
+        result_type="standard",
+        time_range="year",
+    )
+
+
+def test_premier_premier_endpoint_not_regular_search(sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.search.search_premier.return_value = _response(PREMIER)
+
+    _tool(PREMIER).invoke({"query": "q"})
+
+    client.search.search_premier.assert_called_once()
+    client.search.search.assert_not_called()
+
+
+def test_premier_list_options_are_copied(sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.search.search_premier.return_value = _response(PREMIER)
+    include_text, language = ["kafka"], ["en"]
+    tool = _tool(PREMIER, include_text=include_text, language=language)
+
+    include_text.append("later")
+    language[0] = "zh"
+    tool.invoke({"query": "q"})
+
+    client.search.search_premier.assert_called_once_with(
+        query="q", include_text=["kafka"], language=["en"]
+    )
+
+
+@pytest.mark.parametrize(
+    "value", ["2025-01-01", "2025-01-01T00:00:00", "2025-01-01T00:00:00.123Z"], ids=repr
+)
+def test_premier_iso_time_accepted(value: str) -> None:
+    tool = _tool(PREMIER, start_time=value, end_time=value)
+    assert tool.start_time == value  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("result_type", ("standard", "dynamic")),
+        ("time_basis", ("auto", "published", "crawled")),
+        ("format", ("text", "markdown")),
+        ("safesearch", ("off", "strict")),
+    ],
+)
+def test_premier_enumerated_options(field: str, values: Tuple[str, ...]) -> None:
+    annotation = OctenSearchPremier.model_fields[field].annotation
+    assert annotation == Optional[Literal[values]]  # type: ignore[valid-type]
+
+
+def test_premier_description_names_the_model_args_only() -> None:
+    description = _tool(PREMIER).description
+    for name in ("include_domains", "exclude_domains"):
+        assert name in description
+    for name in ("count", "result_type", "full_content", "time_range", "language"):
+        assert name not in description

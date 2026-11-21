@@ -1,4 +1,4 @@
-"""Octen vertical search tools: Broad, News, Business, Pulse and Place.
+"""Octen vertical search tools: Broad, News, Business, Pulse, Place and Web Search Premier.
 
 The model only controls the query and filters that do not change the cost of a call.
 Options that decide how much is returned (and billed) are set by the developer when
@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+from datetime import datetime
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
 
 import octen
@@ -33,6 +34,11 @@ from typing_extensions import Annotated
 from langchain_octen._client import async_client, classify, resolve_api_key, sync_client
 
 TimeRange = Literal["day", "week", "month", "year", "d", "w", "m", "y"]
+# Values documented at https://docs.octen.ai/api-reference/search-premier.md
+Language = Literal[
+    "ar", "de", "en", "es", "fr", "hi", "id", "it", "ja",
+    "ko", "nl", "pl", "pt", "ru", "th", "tr", "vi", "zh",
+]  # fmt: skip
 _Domain = Annotated[str, StringConstraints(max_length=60)]
 
 _QUERY_DESCRIPTION = "Search query. Max 500 characters."
@@ -101,6 +107,25 @@ class OctenFilteredSearchInput(BaseModel):
         description="Relative time window: day, week, month or year (or d, w, m, y).",
     )
     language: Optional[List[str]] = Field(default=None, description=_LANGUAGE_DESCRIPTION)
+
+
+class OctenSearchPremierInput(BaseModel):
+    """Model-facing arguments of Web Search Premier: the same as ``octen_search``."""
+
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=500, description=_QUERY_DESCRIPTION)
+    include_domains: Optional[List[_Domain]] = Field(
+        default=None,
+        max_length=1200,
+        description="Only return results from these domains, e.g. 'arxiv.org'.",
+    )
+    exclude_domains: Optional[List[_Domain]] = Field(
+        default=None,
+        max_length=1200,
+        description="Drop results from these domains.",
+    )
 
 
 class OctenPulseSearchInput(BaseModel):
@@ -625,3 +650,107 @@ class OctenPlaceSearch(_OctenVerticalTool):
         if location:
             kwargs["user_location"] = {"type": "approximate", **location}
         return kwargs
+
+
+class OctenSearchPremier(_OctenVerticalTool):
+    """Octen Web Search Premier: web search with deeper retrieval and reranking.
+
+    Same request options and response shape as Web Search, for questions whose answer
+    sits on one specific, hard-to-find page. Returns
+    ``{"data": ..., "request_id": ..., "warning"?: ...}`` where ``data`` holds
+    ``query`` and ``results``.
+
+    Instantiate:
+        .. code-block:: python
+
+            from langchain_octen import OctenSearchPremier
+
+            tool = OctenSearchPremier(count=5, highlight={"enable": True, "max_tokens": 1024})
+    """
+
+    name: str = "octen_search_premier"
+    description: str = (
+        "Search the live web with deeper retrieval and reranking than a standard web "
+        "search, and return ranked results (title, url, highlight). It searches more "
+        "broadly and ranks more carefully, so the page that holds the answer ranks "
+        "higher, and each highlight is the passage most relevant to the query from the "
+        "whole page. Narrow with include_domains / exclude_domains.\n\n"
+        "USE FOR questions that need the exact page holding the answer: a specific fact, "
+        "a detail deep inside a page, a niche or long-tail document, or a named report, "
+        "filing or document. Pass the question as is (max 500 characters).\n\n"
+        "NOT FOR quick, low-latency lookups: use a standard web search for those. If the "
+        "question spans several independent subtopics, one broad search covers it "
+        "better than a sequence of calls to this tool."
+    )
+    args_schema: Type[BaseModel] = OctenSearchPremierInput
+
+    count: Optional[int] = None
+    """Number of results (1-100); the maximum when ``result_type`` is ``"dynamic"``.
+    Unset uses the server default."""
+    result_type: Optional[Literal["standard", "dynamic"]] = None
+    """``"dynamic"`` returns only relevant results, up to ``count``, and adjusts the
+    highlight length per result. Unset uses the server default (``standard``)."""
+    highlight: Optional[Dict[str, Any]] = None
+    """Highlight options, e.g. ``{"enable": True, "max_tokens": 1024}``."""
+    full_content: Optional[Dict[str, Any]] = None
+    """Full content options, e.g. ``{"enable": True, "max_tokens": 4096}``."""
+    include_text: Optional[List[str]] = None
+    """Strings that must appear in the page text (up to 5, 30 characters each)."""
+    exclude_text: Optional[List[str]] = None
+    """Strings that must not appear in the page text (up to 5, 30 characters each)."""
+    language: Optional[List[Language]] = None
+    """Only return results in these languages, as ISO 639-1 codes."""
+    time_basis: Optional[Literal["auto", "published", "crawled"]] = None
+    """Which time field the time filters use. Unset uses the server default (``auto``)."""
+    time_range: Optional[TimeRange] = None
+    """Relative time window; ``start_time`` / ``end_time`` take precedence over it."""
+    start_time: Optional[str] = None
+    """Only results after this ISO 8601 time, e.g. ``"2025-01-01T00:00:00Z"``."""
+    end_time: Optional[str] = None
+    """Only results before this ISO 8601 time."""
+    format: Optional[Literal["text", "markdown"]] = None
+    """Format of the highlights. Unset uses the server default (``text``)."""
+    safesearch: Optional[Literal["off", "strict"]] = None
+    """Adult content filter. Unset uses the server default (``strict``)."""
+    include_images: Optional[bool] = None
+    """Include each page's cover and in-body images. Unset uses the server default (off)."""
+
+    _sdk_method: ClassVar[Tuple[str, str]] = ("search", "search_premier")
+    _request_model: ClassVar[Any] = octen.PremierSearchRequest
+    _developer_options: ClassVar[Tuple[str, ...]] = (
+        "count",
+        "result_type",
+        "highlight",
+        "full_content",
+        "include_text",
+        "exclude_text",
+        "language",
+        "time_basis",
+        "time_range",
+        "start_time",
+        "end_time",
+        "format",
+        "safesearch",
+        "include_images",
+    )
+
+    def _build_request_model(self, options: Dict[str, Any]) -> None:
+        # octen keeps unknown keys in these two, so a typo like "enabled" would do nothing.
+        for key in ("highlight", "full_content"):
+            unknown = sorted(set(options[key] or ()) - {"enable", "max_tokens"})
+            if unknown:
+                raise ValueError(
+                    f"invalid {self.name} option: {key}: unknown option {', '.join(unknown)}"
+                )
+        super()._build_request_model(options)
+
+    @field_validator("start_time", "end_time", mode="after")
+    @classmethod
+    def _check_time(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            try:
+                # fromisoformat only accepts a trailing "Z" from Python 3.11 on.
+                datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+            except ValueError:
+                raise ValueError("must be an ISO 8601 time, e.g. 2025-01-01T00:00:00Z") from None
+        return value

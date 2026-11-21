@@ -7,6 +7,7 @@ from langchain_octen.vertical_tools import (
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
 )
 
 __version__ = "0.2.0"
@@ -16,6 +17,7 @@ __all__ = [
     "OctenNewsSearch",
     "OctenPlaceSearch",
     "OctenPulseSearch",
+    "OctenSearchPremier",
     "OctenSearchResults",
     "__version__",
 ]
