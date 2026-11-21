@@ -43,6 +43,8 @@ Language = Literal[
 _Domain = Annotated[str, StringConstraints(max_length=60)]
 
 # RFC 3339 date-time, the "format: date-time" of the Web Search Premier API reference.
+# Stricter on purpose: uppercase T and Z only, as in the reference's example, and no leap
+# second (:60), which Python's datetime cannot represent.
 _RFC3339 = re.compile(
     r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))",
     re.ASCII,
