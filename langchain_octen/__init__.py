@@ -10,7 +10,7 @@ from langchain_octen.vertical_tools import (
     OctenSearchPremier,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "OctenBroadSearch",
     "OctenBusinessSearch",

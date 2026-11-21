@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 (2026-11-21)
+
+### Added
+
+- `OctenSearchPremier` (`octen_search_premier`): Web Search Premier, web search with deeper
+  retrieval and reranking for hard-to-find specific facts and pages.
+  - The model gets the same arguments as `octen_search`: `query`, `include_domains`,
+    `exclude_domains`. Result count, `result_type`, highlight / full content, text,
+    language and time filters, `format`, `safesearch`, `include_images` and `timeout` are
+    constructor options, checked when the tool is built; `highlight` and `full_content`
+    accept only the `enable` and `max_tokens` keys, and `start_time` / `end_time` must be
+    ISO 8601 times.
+  - Return shape and error handling are the same as the vertical tools.
+
+### Changed
+
+- Requires `octen>=0.13.0,<1.0.0` (the release that adds `search_premier`).
+
+The existing tools are unchanged: same parameters, same requests, same return shape.
+
 ## 0.2.0
 
 ### Upgrading from 0.1.x

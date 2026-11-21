@@ -8,6 +8,7 @@ LangChain integration for [Octen Web Search](https://octen.ai). Use Octen's fast
 | Tool class | Tool name | Use it for |
 |---|---|---|
 | `OctenSearchResults` | `octen_search` | One focused web lookup |
+| `OctenSearchPremier` | `octen_search_premier` | A hard-to-find specific fact or page (deeper retrieval and reranking) |
 | `OctenBroadSearch` | `octen_broad_search` | Multi-part questions, comparisons, surveys (fans out into sub-queries) |
 | `OctenNewsSearch` | `octen_news_search` | Recent news, with articles grouped into storylines |
 | `OctenBusinessSearch` | `octen_business_search` | Company and person cards (financials, key people, career history) |
@@ -127,8 +128,8 @@ results = tool.invoke({"query": "Python documentation"})
 
 ## Vertical search tools
 
-`OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`, `OctenPulseSearch` and
-`OctenPlaceSearch` share one design:
+`OctenSearchPremier`, `OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`,
+`OctenPulseSearch` and `OctenPlaceSearch` share one design:
 
 - **The model only controls the query and search filters; you control the billing-related
   options and limits** (result counts, highlight / full content, Broad `max_queries`, ...)
@@ -184,6 +185,30 @@ tools = [
     OctenPlaceSearch(places={"count": 5}),
 ]
 agent = create_agent(model=llm, tools=tools)
+```
+
+### Web Search Premier (`OctenSearchPremier`)
+
+Web search with deeper retrieval and reranking, for questions that need the exact page
+holding the answer: a specific fact, a detail deep inside a page, a niche document or a
+named report. Same request options and response shape as Web Search (`data.query`,
+`data.results`). For low-latency lookups use `OctenSearchResults` instead.
+
+The model gets the same arguments as `octen_search`; everything else is yours.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `include_domains`, `exclude_domains` | `count` (1-100), `result_type` (`"standard"` or `"dynamic"`), `highlight`, `full_content` (only the `enable` and `max_tokens` keys), `include_text`, `exclude_text` (up to 5, 30 characters each), `language` (ISO 639-1 codes), `time_basis`, `time_range`, `start_time`, `end_time` (ISO 8601), `format`, `safesearch`, `include_images`, `timeout` |
+
+`result_type="dynamic"` returns only relevant results, up to `count`, and adjusts the
+highlight length per result. Unlike `OctenSearchResults`, the constructor takes no
+`include_domains` / `exclude_domains`: those are the model's.
+
+```python
+tool = OctenSearchPremier(count=5, highlight={"enable": True, "max_tokens": 1024})
+result = tool.invoke({"query": "Kafka default retention period for topics"})
+for r in result["data"]["results"]:
+    print(r["title"], r["url"])
 ```
 
 ### Broad Search (`OctenBroadSearch`)
