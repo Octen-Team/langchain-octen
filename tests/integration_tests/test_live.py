@@ -1,13 +1,16 @@
 """Live tests against the Octen API.
 
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
-tool is invoked once with the smallest result count.
+tool is invoked with a small result count: once, or for the Web Search Premier tests
+two calls (a filtered call and a same-query control).
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import octen
@@ -36,16 +39,22 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
-    """Bill each live test at most once: the tools' clients get max_retries=0 here only."""
+    """Bill each request at most once: the tools' clients get max_retries=0 here only.
+
+    Tests in _NO_REQUEST get factories that fail, so they can never send a request.
+    """
     created: List[str] = []
+    no_request = request.node.name in _NO_REQUEST
 
     def sync_client(api_key: SecretStr) -> octen.Octen:
+        assert not no_request, "this test must not send a request"
         created.append("sync")
         return octen.Octen(
             api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
         )
 
     def async_client(api_key: SecretStr) -> octen.AsyncOcten:
+        assert not no_request, "this test must not send a request"
         created.append("async")
         return octen.AsyncOcten(
             api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
@@ -55,7 +64,7 @@ def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequ
         monkeypatch.setattr(module, "sync_client", sync_client)
         monkeypatch.setattr(module, "async_client", async_client)
     yield
-    if request.node.name not in _NO_REQUEST:
+    if not no_request:
         assert created, "the tool did not use the patched client factory"
 
 
@@ -162,6 +171,29 @@ def test_out_of_range_developer_count_raises_at_construction() -> None:
         OctenNewsSearch(count=1000)
 
 
+# The SDK's own Premier live tests use this query; its results span several years.
+TIME_QUERY = "electric vehicle battery"
+YEAR_2025 = ("2025-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
+_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?")
+
+
+def _ts(value: Any) -> Optional[datetime]:
+    """None when absent; raises on a value that does not parse, so it cannot pass unchecked."""
+    if value is None or value == "":
+        return None
+    match = _STAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError(f"unparseable timestamp {value!r}")
+    base, frac, tz = match.groups()
+    # fromisoformat before 3.11 takes neither Z nor fractions other than 3 or 6 digits.
+    frac = "." + (frac + "000000")[:6] if frac else ""
+    return datetime.fromisoformat(base + frac + ("+00:00" if tz in (None, "Z") else tz))
+
+
+def _published(result: Dict[str, Any]) -> List[Optional[datetime]]:
+    return [_ts(r.get("time_published")) for r in result["data"]["results"]]
+
+
 def _hosts(result: Dict[str, Any]) -> List[str]:
     return [urlparse(r["url"]).hostname or "" for r in result["data"]["results"]]
 
@@ -220,18 +252,41 @@ def test_search_premier_developer_options(premier_responses: List[Any]) -> None:
 
 @pytest.mark.asyncio
 async def test_search_premier_time_window_async() -> None:
+    # The filtered call first, then the same query without bounds as the control.
+    start, end = _ts(YEAR_2025[0]), _ts(YEAR_2025[1])
+    assert start and end
     tool = OctenSearchPremier(
-        count=3,
-        time_basis="published",
-        start_time="2025-01-01T00:00:00Z",
-        end_time="2025-12-31T23:59:59Z",
+        count=5, time_basis="published", start_time=YEAR_2025[0], end_time=YEAR_2025[1]
     )
-    result = await tool.ainvoke({"query": "EU AI Act enforcement timeline"})
-    _check(tool.name, result)
-    published = [r.get("time_published") or "" for r in result["data"]["results"]]
-    print(f"time_published={published}")
+    result = await tool.ainvoke({"query": TIME_QUERY})
+    _check(f"{tool.name} 2025", result)
+    published = _published(result)
+    print(f"2025 time_published={published}")
     assert published, result
-    assert all(p.startswith("2025-") for p in published), published
+    assert all(t is not None and start <= t <= end for t in published), published
+
+    control = await OctenSearchPremier(count=5, time_basis="published").ainvoke(
+        {"query": TIME_QUERY}
+    )
+    _check(f"{tool.name} control", control)
+    print(f"control time_published={_published(control)}")
+    assert any(t and not start <= t <= end for t in _published(control)), control
+
+
+def test_search_premier_each_time_bound() -> None:
+    # Without start_time a result before the window comes back, and without end_time one after.
+    start, end = _ts(YEAR_2025[0]), _ts(YEAR_2025[1])
+    assert start and end
+    end_only = OctenSearchPremier(count=5, time_basis="published", end_time=YEAR_2025[1])
+    start_only = OctenSearchPremier(count=5, time_basis="published", start_time=YEAR_2025[0])
+    before = end_only.invoke({"query": TIME_QUERY})
+    after = start_only.invoke({"query": TIME_QUERY})
+    _check("end-only", before)
+    _check("start-only", after)
+    print(f"end-only time_published={_published(before)}")
+    print(f"start-only time_published={_published(after)}")
+    assert any(t and t < start for t in _published(before)), before
+    assert any(t and t > end for t in _published(after)), after
 
 
 def test_search_premier_model_cannot_set_count() -> None:
