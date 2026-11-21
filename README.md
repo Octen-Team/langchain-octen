@@ -198,7 +198,7 @@ The model gets the same arguments as `octen_search`; everything else is yours.
 
 | Model arguments | Constructor options |
 |---|---|
-| `query`, `include_domains`, `exclude_domains` | `count` (1-100), `result_type` (`"standard"` or `"dynamic"`), `highlight`, `full_content` (only the `enable` and `max_tokens` keys), `include_text`, `exclude_text` (up to 5, 30 characters each), `language` (ISO 639-1 codes), `time_basis`, `time_range`, `start_time`, `end_time` (ISO 8601), `format`, `safesearch`, `include_images`, `timeout` |
+| `query`, `include_domains`, `exclude_domains` | `count` (1-100), `result_type` (`"standard"` or `"dynamic"`), `highlight`, `full_content` (only the `enable` and `max_tokens` keys), `include_text`, `exclude_text` (up to 5, 30 characters each), `language` (ISO 639-1 codes), `time_basis`, `time_range`, `start_time`, `end_time` (RFC 3339, e.g. `2025-01-01T00:00:00Z`), `format`, `safesearch`, `include_images`, `timeout` |
 
 `result_type="dynamic"` returns only relevant results, up to `count`, and adjusts the
 highlight length per result. Unlike `OctenSearchResults`, the constructor takes no

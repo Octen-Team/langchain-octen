@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (2026-11-21)
+## 0.3.0
 
 ### Added
 
@@ -11,7 +11,7 @@
     language and time filters, `format`, `safesearch`, `include_images` and `timeout` are
     constructor options, checked when the tool is built; `highlight` and `full_content`
     accept only the `enable` and `max_tokens` keys, and `start_time` / `end_time` must be
-    ISO 8601 times.
+    RFC 3339 times (e.g. `2025-01-01T00:00:00Z`).
   - Return shape and error handling are the same as the vertical tools.
 
 ### Changed

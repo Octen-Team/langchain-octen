@@ -725,9 +725,9 @@ class OctenSearchPremier(_OctenVerticalTool):
     time_range: Optional[TimeRange] = None
     """Relative time window; ``start_time`` / ``end_time`` take precedence over it."""
     start_time: Optional[str] = None
-    """Only results after this ISO 8601 time, e.g. ``"2025-01-01T00:00:00Z"``."""
+    """Only results after this RFC 3339 time, e.g. ``"2025-01-01T00:00:00Z"``."""
     end_time: Optional[str] = None
-    """Only results before this ISO 8601 time."""
+    """Only results before this RFC 3339 time."""
     format: Optional[Literal["text", "markdown"]] = None
     """Format of the highlights. Unset uses the server default (``text``)."""
     safesearch: Optional[Literal["off", "strict"]] = None
