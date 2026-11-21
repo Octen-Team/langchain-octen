@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import octen
 import pytest
@@ -21,6 +22,7 @@ from langchain_octen import (
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
     OctenSearchResults,
     _utilities,
     vertical_tools,
@@ -53,8 +55,16 @@ def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequ
         monkeypatch.setattr(module, "sync_client", sync_client)
         monkeypatch.setattr(module, "async_client", async_client)
     yield
-    if request.node.name != "test_out_of_range_developer_count_raises_at_construction":
+    if request.node.name not in _NO_REQUEST:
         assert created, "the tool did not use the patched client factory"
+
+
+# Tests that must not reach the API at all.
+_NO_REQUEST = {
+    "test_out_of_range_developer_count_raises_at_construction",
+    "test_search_premier_model_cannot_set_count",
+    "test_search_premier_bad_option_raises_at_construction",
+}
 
 
 def _check(name: str, result: Any) -> None:
@@ -150,3 +160,85 @@ def test_bad_key_raises_authentication_error() -> None:
 def test_out_of_range_developer_count_raises_at_construction() -> None:
     with pytest.raises(ValueError, match="count"):
         OctenNewsSearch(count=1000)
+
+
+def _hosts(result: Dict[str, Any]) -> List[str]:
+    return [urlparse(r["url"]).hostname or "" for r in result["data"]["results"]]
+
+
+def _on(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+@pytest.fixture
+def premier_responses(monkeypatch: pytest.MonkeyPatch) -> List[Any]:
+    """Record octen's responses: meta (e.g. result_type) is not part of the tool result."""
+    responses: List[Any] = []
+    original = SearchResource.search_premier
+
+    def spy(self: SearchResource, *args: Any, **kwargs: Any) -> Any:
+        response = original(self, *args, **kwargs)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(SearchResource, "search_premier", spy)
+    return responses
+
+
+def test_search_premier_include_domains() -> None:
+    # Same query with and without the model's domain filter.
+    tool = OctenSearchPremier(count=5)
+    query = "Apache Kafka"
+    control = tool.invoke({"query": query})
+    filtered = tool.invoke({"query": query, "include_domains": ["wikipedia.org"]})
+    _check(f"{tool.name} control", control)
+    _check(f"{tool.name} include_domains", filtered)
+    print(f"control hosts={_hosts(control)} filtered hosts={_hosts(filtered)}")
+    assert any(not _on(h, "wikipedia.org") for h in _hosts(control)), control
+    assert _hosts(filtered), filtered
+    assert all(_on(h, "wikipedia.org") for h in _hosts(filtered)), filtered
+
+
+def test_search_premier_developer_options(premier_responses: List[Any]) -> None:
+    # Same query with server defaults and with full content plus dynamic results.
+    query = "Kafka default retention period for topics"
+    control = OctenSearchPremier(count=2).invoke({"query": query})
+    tool = OctenSearchPremier(
+        count=2, result_type="dynamic", full_content={"enable": True, "max_tokens": 200}
+    )
+    result = tool.invoke({"query": query})
+    _check(f"{tool.name} control", control)
+    _check(f"{tool.name} options", result)
+    metas = [r.meta for r in premier_responses]
+    print(f"meta result_type={[m.get('result_type') for m in metas]}")
+    assert [m.get("result_type") for m in metas] == ["standard", "dynamic"], metas
+    assert 0 < len(control["data"]["results"]) <= 2, control
+    assert 0 < len(result["data"]["results"]) <= 2, result
+    assert not any(r.get("full_content") for r in control["data"]["results"]), control
+    assert all(r.get("full_content") for r in result["data"]["results"]), result
+
+
+@pytest.mark.asyncio
+async def test_search_premier_time_window_async() -> None:
+    tool = OctenSearchPremier(
+        count=3,
+        time_basis="published",
+        start_time="2025-01-01T00:00:00Z",
+        end_time="2025-12-31T23:59:59Z",
+    )
+    result = await tool.ainvoke({"query": "EU AI Act enforcement timeline"})
+    _check(tool.name, result)
+    published = [r.get("time_published") or "" for r in result["data"]["results"]]
+    print(f"time_published={published}")
+    assert published, result
+    assert all(p.startswith("2025-") for p in published), published
+
+
+def test_search_premier_model_cannot_set_count() -> None:
+    result = OctenSearchPremier(count=1).invoke({"query": "Apache Kafka", "count": 50})
+    assert isinstance(result, str) and "count" in result, result
+
+
+def test_search_premier_bad_option_raises_at_construction() -> None:
+    with pytest.raises(ValueError, match="result_type"):
+        OctenSearchPremier(result_type="smart")
