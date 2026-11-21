@@ -174,6 +174,9 @@ def test_out_of_range_developer_count_raises_at_construction() -> None:
 # The SDK's own Premier live tests use this query; its results span several years.
 TIME_QUERY = "electric vehicle battery"
 YEAR_2025 = ("2025-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
+# Single-bound controls use a window with content on both sides. With only end_time=2025-12-31
+# the server returned mostly undated results and nothing before 2025 (run of 2026-11-21).
+H1_2026 = ("2026-01-01T00:00:00Z", "2026-06-30T23:59:59Z")
 _STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?")
 
 
@@ -275,10 +278,10 @@ async def test_search_premier_time_window_async() -> None:
 
 def test_search_premier_each_time_bound() -> None:
     # Without start_time a result before the window comes back, and without end_time one after.
-    start, end = _ts(YEAR_2025[0]), _ts(YEAR_2025[1])
+    start, end = _ts(H1_2026[0]), _ts(H1_2026[1])
     assert start and end
-    end_only = OctenSearchPremier(count=5, time_basis="published", end_time=YEAR_2025[1])
-    start_only = OctenSearchPremier(count=5, time_basis="published", start_time=YEAR_2025[0])
+    end_only = OctenSearchPremier(count=10, time_basis="published", end_time=H1_2026[1])
+    start_only = OctenSearchPremier(count=10, time_basis="published", start_time=H1_2026[0])
     before = end_only.invoke({"query": TIME_QUERY})
     after = start_only.invoke({"query": TIME_QUERY})
     _check("end-only", before)
