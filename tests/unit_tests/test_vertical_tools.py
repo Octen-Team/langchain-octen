@@ -941,12 +941,50 @@ def test_premier_list_options_are_copied(sync_client: MagicMock) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "value", ["2025-01-01", "2025-01-01T00:00:00", "2025-01-01T00:00:00.123Z"], ids=repr
-)
-def test_premier_iso_time_accepted(value: str) -> None:
-    tool = _tool(PREMIER, start_time=value, end_time=value)
-    assert tool.start_time == value  # type: ignore[attr-defined]
+# RFC 3339 date-time, the "format: date-time" of
+# https://docs.octen.ai/api-reference/search-premier.md
+RFC3339_VALID = [
+    "2025-01-01T00:00:00Z",
+    "2025-01-01T00:00:00.1Z",
+    "2025-01-01T00:00:00.123456Z",
+    "2025-06-30T23:59:59+08:00",
+    "2025-01-01T00:00:00-05:30",
+    "2024-02-29T12:00:00Z",
+]
+RFC3339_INVALID = [
+    "2025-01-01",
+    "2025-01-01T00:00:00",
+    "2025-01-01X00:00:00Z",
+    "2025-01-01 00:00:00Z",
+    "2025-13-01T00:00:00Z",
+    "2025-02-29T00:00:00Z",
+    "2025-01-01T24:00:00Z",
+    "2025-01-01T00:00:00+24:00",
+    "2025-01-01T00:00:00.Z",
+    "2025-01-01T00:00:00Z\n",
+    "\uff12025-01-01T00:00:00Z",
+    "20250101T000000Z",
+    "last week",
+]
+
+
+@pytest.mark.parametrize("value", RFC3339_VALID, ids=repr)
+def test_premier_rfc3339_time_accepted(value: str, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.search.search_premier.return_value = _response(PREMIER)
+
+    _tool(PREMIER, start_time=value, end_time=value).invoke({"query": "q"})
+
+    client.search.search_premier.assert_called_once_with(
+        query="q", start_time=value, end_time=value
+    )
+
+
+@pytest.mark.parametrize("field", ["start_time", "end_time"])
+@pytest.mark.parametrize("value", RFC3339_INVALID, ids=repr)
+def test_premier_non_rfc3339_time_rejected(value: str, field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        _tool(PREMIER, **{field: value})
 
 
 @pytest.mark.parametrize(

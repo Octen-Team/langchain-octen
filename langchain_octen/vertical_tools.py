@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import re
 from datetime import datetime
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Type, Union
 
@@ -40,6 +41,25 @@ Language = Literal[
     "ko", "nl", "pl", "pt", "ru", "th", "tr", "vi", "zh",
 ]  # fmt: skip
 _Domain = Annotated[str, StringConstraints(max_length=60)]
+
+# RFC 3339 date-time, the "format: date-time" of the Web Search Premier API reference.
+_RFC3339 = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))",
+    re.ASCII,
+)
+
+
+def _is_rfc3339(value: Any) -> bool:
+    match = _RFC3339.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        return False
+    year, month, day, hour, minute, second, off_hour, off_minute = match.groups()
+    try:
+        datetime(int(year), int(month), int(day), int(hour), int(minute), int(second))
+    except ValueError:
+        return False
+    return off_hour is None or (int(off_hour) <= 23 and int(off_minute) <= 59)
+
 
 _QUERY_DESCRIPTION = "Search query. Max 500 characters."
 _LANGUAGE_DESCRIPTION = (
@@ -747,10 +767,6 @@ class OctenSearchPremier(_OctenVerticalTool):
     @field_validator("start_time", "end_time", mode="after")
     @classmethod
     def _check_time(cls, value: Optional[str]) -> Optional[str]:
-        if value is not None:
-            try:
-                # fromisoformat only accepts a trailing "Z" from Python 3.11 on.
-                datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
-            except ValueError:
-                raise ValueError("must be an ISO 8601 time, e.g. 2025-01-01T00:00:00Z") from None
+        if value is not None and not _is_rfc3339(value):
+            raise ValueError("must be an RFC 3339 time, e.g. 2025-01-01T00:00:00Z")
         return value
