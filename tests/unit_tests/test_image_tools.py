@@ -749,6 +749,20 @@ def test_design_wire_all_options() -> None:
     assert json.dumps(seen) == json.dumps([("POST", "/design-search", body, 9.0)])
 
 
+def test_design_list_options_are_sent_in_full(sync_client: MagicMock) -> None:
+    web = {"language": ["en", "de"], "include_domains": ("a.com",), "exclude_domains": ["b.com"]}
+    tool = _design(web_search=web)
+
+    tool.invoke({"query": "q"})
+    tool.invoke({"query": "q"})
+
+    for call in _des_search(sync_client).call_args_list:
+        sent = call.kwargs["web_search"]
+        assert list(sent["language"]) == ["en", "de"], sent
+        assert list(sent["include_domains"]) == ["a.com"], sent
+        assert list(sent["exclude_domains"]) == ["b.com"], sent
+
+
 def test_design_option_dicts_are_copied(sync_client: MagicMock) -> None:
     images = copy.deepcopy(IMAGES)
     web = copy.deepcopy(WEB)
@@ -1213,6 +1227,12 @@ def test_design_model_cannot_set_developer_options(
         # Switches must be real booleans: "false" would be coerced by octen but not here.
         ({"images": {"enable": "false"}}, "images.enable"),
         ({"web_search": {"enable": 0}}, "web_search.enable"),
+        # One-shot iterators would be consumed by the construction check and then send
+        # nothing; lists are required.
+        ({"web_search": {"language": iter(["en"])}}, "web_search.language"),
+        ({"web_search": {"include_domains": (d for d in ["a.com"])}}, "web_search.include_domains"),
+        ({"web_search": {"exclude_domains": map(str, ["b.com"])}}, "web_search.exclude_domains"),
+        ({"images": {"snippet": {"max_tokens": iter([1000])}}}, "images.snippet.max_tokens"),
         ({"images": {"cuont": 3}}, "cuont"),
         ({"images": {"group_id": GROUP_ID}}, "group_id"),
         ({"images": {"snippet": {"max_tokens": 99}}}, "max_tokens"),

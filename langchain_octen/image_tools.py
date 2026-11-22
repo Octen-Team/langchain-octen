@@ -14,7 +14,7 @@ import string
 from contextvars import ContextVar
 from datetime import datetime
 from fractions import Fraction
-from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
+from typing import Any, ClassVar, Dict, Iterator, List, Optional, Tuple, Type
 from urllib.parse import urlsplit
 
 import octen
@@ -28,6 +28,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -176,6 +177,14 @@ def _instant(value: str) -> Tuple[int, Fraction]:
         seconds -= shift if offset[0] == "+" else -shift
     exact = Fraction(int(fraction), 10 ** len(fraction)) if fraction else Fraction(0)
     return seconds, exact
+
+
+def _reject_iterators(value: Any, path: str) -> None:
+    if isinstance(value, Iterator):
+        raise ValueError(f"{path} must be a list, not a one-shot iterator or generator")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _reject_iterators(item, f"{path}.{key}")
 
 
 def _not_blank(value: Optional[str]) -> Optional[str]:
@@ -487,6 +496,14 @@ class OctenDesignSearch(_OctenVerticalTool):
     _sdk_method: ClassVar[Tuple[str, str]] = ("design_search", "search")
     _request_model: ClassVar[Any] = octen.DesignSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = ("images", "web_search")
+
+    @field_validator("images", "web_search", mode="before")
+    @classmethod
+    def _no_one_shot_iterators(cls, value: Any, info: ValidationInfo) -> Any:
+        # The construction check would consume an iterator and every request then send it
+        # empty, silently dropping the filter; only re-iterable values are kept.
+        _reject_iterators(value, str(info.field_name))
+        return value
 
     @field_validator("images", mode="after")
     @classmethod
