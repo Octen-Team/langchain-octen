@@ -285,6 +285,13 @@ def test_search_premier_each_time_bound() -> None:
     # Without start_time a result before the window comes back, and without end_time one after.
     start, end = _ts(BOUND_WINDOW[0]), _ts(BOUND_WINDOW[1])
     assert start and end
+    # Unfiltered control first: dated results on both sides make each bound check discriminate.
+    unfiltered = OctenSearchPremier(count=10, time_basis="published").invoke({"query": TIME_QUERY})
+    _check("unfiltered", unfiltered)
+    print(f"unfiltered time_published={_published(unfiltered)}")
+    unfiltered_dated = [t for t in _published(unfiltered) if t]
+    assert any(t < start for t in unfiltered_dated), unfiltered
+    assert any(t > end for t in unfiltered_dated), unfiltered
     end_only = OctenSearchPremier(count=10, time_basis="published", end_time=BOUND_WINDOW[1])
     start_only = OctenSearchPremier(count=10, time_basis="published", start_time=BOUND_WINDOW[0])
     before = end_only.invoke({"query": TIME_QUERY})
