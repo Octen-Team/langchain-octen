@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import octen
 import pytest
+from langchain_core.tools import ToolException
 from octen import (
     OctenAPIError,
     OctenAuthenticationError,
@@ -324,6 +325,9 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://example.com/a b.png"}, "image_url"),
         ({"image_url": " https://example.com/a.png"}, "image_url"),
         ({"image_url": "https://example.com/a.png\n"}, "image_url"),
+        ({"image_url": "\x00https://example.com/a.png"}, "image_url"),
+        ({"image_url": "https://example.com/a\x7f.png"}, "image_url"),
+        ({"image_url": "https:///example.com/a.png"}, "image_url"),
         ({"query": "   "}, "query"),
         ({"query": "\t\n"}, "query"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
@@ -347,6 +351,9 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-space-in-path",
         "url-leading-space",
         "url-trailing-newline",
+        "url-leading-nul",
+        "url-del-char",
+        "url-empty-authority",
         "query-blank",
         "query-whitespace",
         "include-11",
@@ -502,9 +509,15 @@ def test_design_without_images_offers_no_group_lookup() -> None:
 def test_design_without_images_rejects_group_only_call(
     images: Dict[str, Any], sync_client: MagicMock
 ) -> None:
-    result = _design(images=images).invoke({"group_id": GROUP_ID})
+    tool = _design(images=images)
+    result = tool.invoke({"group_id": GROUP_ID})
 
-    assert isinstance(result, str) and "pass `query`" in result, result
+    # The schema has no group_id and requires query, so the model is told both.
+    assert isinstance(result, str) and result.startswith("Invalid tool input"), result
+    assert "query" in result and "group_id" in result, result
+    # A direct call that bypasses the schema is refused too.
+    with pytest.raises(ToolException, match="pass `query`"):
+        tool._run(group_id=GROUP_ID)
     sync_client.assert_not_called()
 
 
@@ -512,9 +525,12 @@ def test_design_without_images_rejects_group_only_call(
 async def test_design_without_images_rejects_group_only_call_async(
     async_client: MagicMock,
 ) -> None:
-    result = await _design(images={"enable": False}).ainvoke({"group_id": GROUP_ID})
+    tool = _design(images={"enable": False})
+    result = await tool.ainvoke({"group_id": GROUP_ID})
 
-    assert isinstance(result, str) and "pass `query`" in result, result
+    assert isinstance(result, str) and "query" in result and "group_id" in result, result
+    with pytest.raises(ToolException, match="pass `query`"):
+        await tool._arun(group_id=GROUP_ID)
     async_client.assert_not_called()
 
 
@@ -710,15 +726,65 @@ async def test_image_error_log_hides_url_async(
 @pytest.mark.parametrize(
     "exc",
     [OctenAPIError(f"too large: {SIGNED_URL}", status_code=413),
+     # Upstream text can echo a truncated or normalized copy that a replace would miss.
+     OctenAPIError("bad image cdn.example.com/photo.jpg?sig=SECRET-TOKEN-1...", status_code=415),
+     OctenAPIError("unreadable https://CDN.EXAMPLE.COM/photo.jpg?sig=SECRET-TOKEN-123",
+                   status_code=422, request_id="rid-422"),
+     OctenAPIError("upstream unavailable sig=SECRET-TOKEN-123", status_code=503),
+     OctenRateLimitError(request_id="rid-429"),
      OctenTimeoutError(timeout=30.0, request_sent=True)],
-    ids=["413", "timeout"],
+    ids=["413", "415-truncated", "422-normalized", "503", "429", "timeout"],
 )  # fmt: skip
 def test_image_model_message_hides_url_query(exc: Exception, sync_client: MagicMock) -> None:
     _img_search(sync_client).side_effect = exc
 
     result = _image().invoke({"image_url": SIGNED_URL})
 
-    assert isinstance(result, str) and "SECRET-TOKEN-123" not in result, result
+    assert isinstance(result, str) and "SECRET-TOKEN" not in result, result
+    assert str(exc) not in result and type(exc).__name__ in result, result
+    request_id = getattr(exc, "request_id", None)
+    if request_id:
+        assert f"request_id {request_id}" in result, result
+
+
+def test_image_url_timeout_keeps_billing_warning(sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = OctenTimeoutError(timeout=30.0, request_sent=True)
+
+    result = _image().invoke({"image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and MAY_HAVE_BEEN_SENT in result, result
+
+
+def test_image_text_query_keeps_upstream_text(sync_client: MagicMock) -> None:
+    exc = OctenAPIError("Input unreadable or invalid", status_code=422)
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke({"query": "q"})
+
+    assert isinstance(result, str) and str(exc) in result, result
+
+
+def test_design_without_images_schema_requires_query() -> None:
+    tool = _design(images={"enable": False})
+    assert set(tool.args) == {"query"}
+    schema = tool.tool_call_schema.model_json_schema()
+    assert schema.get("required") == ["query"] and "group_id" not in schema["properties"]
+
+
+def test_design_without_images_drops_group_id(sync_client: MagicMock) -> None:
+    tool = _design(images={"enable": False})
+    result = tool.invoke({"query": "q", "group_id": GROUP_ID})
+    assert isinstance(result, str) and "group_id" in result, result
+    sync_client.assert_not_called()
+
+    # A direct call that bypasses the schema still does not forward group_id.
+    tool._run(query="q", group_id=GROUP_ID)
+    _des_search(sync_client).assert_called_once_with(query="q", images={"enable": False})
+
+
+def test_design_with_images_schema_keeps_group_id() -> None:
+    assert set(_design().args) == {"query", "group_id"}
+    assert set(_design(images={"count": 2}).args) == {"query", "group_id"}
 
 
 @pytest.mark.parametrize("args", [{}, {"query": None}, {"group_id": None}], ids=repr)
@@ -993,8 +1059,8 @@ def test_image_input_errors_go_to_model(exc: Exception, hint: str, sync_client: 
 
     result = _image().invoke({"image_url": IMAGE_URL})
 
-    assert isinstance(result, str) and str(exc) in result and hint in result, result
-    assert "another image" in result
+    assert isinstance(result, str) and hint in result and "another image" in result, result
+    assert f"status {exc.status_code}" in result and str(exc) not in result, result  # type: ignore[attr-defined]
     sync_client.return_value.close.assert_called_once()
 
 

@@ -28,7 +28,7 @@ from pydantic import (
 )
 from typing_extensions import Annotated, Literal, get_args
 
-from langchain_octen._client import classify
+from langchain_octen._client import MAY_HAVE_BEEN_SENT, classify
 from langchain_octen.vertical_tools import (
     _PLACEHOLDER_QUERY,
     Language,
@@ -46,7 +46,9 @@ _IMAGE_INPUT_HINTS = {
     "image URL.",
     415: "The image format is not supported: use a JPEG, PNG, WEBP, BMP, TIFF, ICO, DIB, "
     "ICNS or SGI image, or try another image URL.",
+    429: "The rate limit was exceeded: wait before trying again.",
 }
+_IMAGE_URL_HINT = "Try another image URL."
 
 # --- Image Search ------------------------------------------------------------------------
 
@@ -122,6 +124,8 @@ class OctenImageSearchInput(BaseModel):
     def _check_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+            raise ValueError("must be a URL without control characters")
         if any(ch.isspace() for ch in value):
             raise ValueError("must be a URL without spaces or line breaks")
         try:
@@ -181,12 +185,25 @@ class OctenImageSearch(_OctenVerticalTool):
             message: Optional[str] = f"{exc}. {_IMAGE_INPUT_HINTS[status]}"
         else:
             message = classify(exc)
+        request_id = getattr(exc, "request_id", None)
         if message is None:
             kind = "image URL" if url else "text query"
-            request_id = getattr(exc, "request_id", None)
             logger.error("%s (input: %s, request_id=%s)", type(exc).__name__, kind, request_id)
             return None
-        return message.replace(url, "the image URL") if url else message
+        if not url:
+            return message
+        # Upstream text can echo the signed URL in a form a replace would miss, so a fixed
+        # message is built from the status and request id only.
+        details = [type(exc).__name__]
+        if status is not None:
+            details.append(f"status {status}")
+        if request_id:
+            details.append(f"request_id {request_id}")
+        hint = _IMAGE_INPUT_HINTS.get(status) if isinstance(status, int) else None
+        fixed = (
+            f"Image search by image URL failed ({', '.join(details)}). {hint or _IMAGE_URL_HINT}"
+        )
+        return f"{fixed} {MAY_HAVE_BEEN_SENT}" if MAY_HAVE_BEEN_SENT in message else fixed
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         inputs = [{"type": "text", "data": _PLACEHOLDER_QUERY}]
@@ -298,6 +315,22 @@ class OctenDesignSearchInput(BaseModel):
         return self
 
 
+class OctenDesignSearchWebInput(BaseModel):
+    """Model-facing arguments of Design Search when image results are turned off."""
+
+    # A misspelt argument must reach the model as an error, not run an unfiltered search.
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(
+        min_length=1,
+        max_length=500,
+        description="What to find design pages for, e.g. 'pricing section for a SaaS "
+        "landing page'. Max 500 characters.",
+    )
+
+    _check_query = field_validator("query", mode="after")(_not_blank)
+
+
 class OctenDesignSearch(_OctenVerticalTool):
     """Octen Design Search: design references as screenshots with their design values.
 
@@ -353,6 +386,8 @@ class OctenDesignSearch(_OctenVerticalTool):
             return self
         if not self._images_enabled():
             self.description = _DESIGN_WEB_ONLY_DESCRIPTION
+            if "args_schema" not in self.model_fields_set:
+                self.args_schema = OctenDesignSearchWebInput
         elif isinstance(count, int):
             self.description = _DESIGN_DESCRIPTION.format(limit=f"up to {count} images")
         return self
@@ -396,7 +431,7 @@ class OctenDesignSearch(_OctenVerticalTool):
         if model_args["query"] is not None:
             kwargs["query"] = model_args["query"]
         images = self.images
-        if model_args["group_id"] is not None:
+        if model_args["group_id"] is not None and self._images_enabled():
             images = {**(images or {}), "group_id": model_args["group_id"]}
         if images is not None:
             kwargs["images"] = images

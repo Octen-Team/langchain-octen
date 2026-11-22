@@ -11,8 +11,10 @@
     each result's source page). A call with both inputs or neither is refused without a
     request, and the model is told which to pass. Base64 images are not accepted from the
     model; call `octen` directly for those. An `image_url` must be http(s) with a host name,
-    a valid port and no whitespace; a blank `query` is refused. Raised errors are logged
-    with the input kind and request id, never the image URL or query.
+    a valid port and no whitespace or control characters; a blank `query` is refused.
+    Raised errors are logged with the input kind and request id, never the image URL or
+    query, and errors for an `image_url` call reach the model as a fixed message without
+    upstream text.
   - 413 (image too large) and 415 (unsupported format) are returned to the model with a hint
     to try another image, instead of being raised like other 4xx responses.
   - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor
@@ -24,8 +26,8 @@
     `group.group_id` of an earlier image result and returns the first images of that page
     or deck in group order instead of a search, at most `images.count` (5 by default); the
     tool description states the limit. A call with neither is refused without a request.
-    With `images={"enable": False}` the description offers no group lookup and a
-    `group_id`-only call is refused.
+    With `images={"enable": False}` the input schema has only a required `query`, the
+    description offers no group lookup and `group_id` is never forwarded.
   - `images` (`enable`, `count`, `design_facts`, `snippet`) and `web_search` (`enable`,
     `count`, `highlight`, `full_content`, domain, language and time filters) and `timeout`
     are constructor options, checked when the tool is built: `images.group_id` is refused
