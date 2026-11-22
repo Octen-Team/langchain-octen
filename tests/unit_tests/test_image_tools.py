@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import builtins
 import copy
 import inspect
 import json
 import logging
+import sys
 from typing import Any, Dict, List, Tuple, Type, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -465,6 +467,9 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "https://user:pass@example.com/a.png",
         # A non-ASCII space (U+00A0) in the path is left to the URL parser and sent as is.
         "https://example.com/caf\u00e9\u00a0menu.png",
+        # The server keeps the query and fragment raw, so a bare % there is fine.
+        "https://example.com/photo.png?label=50%",
+        "https://example.com/photo.png#50%zz",
     ],
     ids=[
         "upper",
@@ -477,6 +482,8 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "arabic-punycode",
         "userinfo",
         "nbsp-in-path",
+        "bare-percent-in-query",
+        "bad-escape-in-fragment",
     ],
 )
 def test_image_https_urls_accepted(url: str, sync_client: MagicMock) -> None:
@@ -882,12 +889,15 @@ def test_raised_error_for_image_url_is_sanitized(
     exc: Exception, sync_client: MagicMock, caplog: pytest.LogCaptureFixture
 ) -> None:
     _img_search(sync_client).side_effect = exc
+    # Octen classes are rebuilt as themselves; anything else becomes a generic OctenError.
+    expected = type(exc) if isinstance(exc, octen.OctenError) else octen.OctenError
 
     with caplog.at_level(logging.DEBUG, logger="langchain_octen"):
-        with pytest.raises(type(exc)) as info:
+        with pytest.raises(Exception) as info:
             _image().invoke({"image_url": SIGNED_URL})
 
     raised = info.value
+    assert type(raised) is expected, type(raised)
     rendered = "".join(
         __import__("traceback").format_exception(type(raised), raised, raised.__traceback__)
     )
@@ -911,6 +921,56 @@ async def test_raised_error_for_image_url_is_sanitized_async(async_client: Magic
     assert "SECRET-TOKEN" not in str(info.value) and "SECRET-TOKEN" not in repr(info.value)
     assert info.value.status_code == 403 and info.value.request_id == "rid-403"
     assert info.value.__cause__ is None and info.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    ("exc", "kept"),
+    [
+        (OctenAPIError(SIGNED_URL, status_code=403, request_id="r"),
+         {"status_code": 403, "request_id": "r"}),
+        (OctenAuthenticationError(SIGNED_URL, request_id="r"),
+         {"status_code": 401, "request_id": "r"}),
+        (OctenRateLimitError(SIGNED_URL, retry_after=3.0, request_id="r"),
+         {"status_code": 429, "request_id": "r", "retry_after": 3.0}),
+        (OctenValidationError(SIGNED_URL, errors=[SIGNED_URL]), {"errors": []}),
+        (OctenTimeoutError(SIGNED_URL, timeout=5.0, request_sent=True),
+         {"timeout": 5.0, "request_sent": True}),
+        (OctenConnectionError(SIGNED_URL, request_sent=False), {"request_sent": False}),
+    ],
+    ids=["api", "auth", "rate-limit", "validation", "timeout", "connection"],
+)  # fmt: skip
+def test_sanitized_octen_errors_are_rebuilt_as_themselves(
+    exc: Exception, kept: Dict[str, Any]
+) -> None:
+    from langchain_octen.image_tools import _without_upstream_text
+
+    clean = _without_upstream_text(exc)
+
+    assert type(clean) is type(exc)
+    assert "SECRET-TOKEN" not in str(clean) and "SECRET-TOKEN" not in repr(clean)
+    assert "SECRET-TOKEN" not in repr(vars(clean))
+    for attr, value in kept.items():
+        assert getattr(clean, attr) == value, attr
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup is new in 3.11")
+def test_raised_exception_group_for_image_url_is_generic(sync_client: MagicMock) -> None:
+    group_cls = getattr(builtins, "ExceptionGroup")
+    exc = group_cls(f"several failures for {SIGNED_URL}", [ValueError(SIGNED_URL)])
+    exc.request_id = "rid-eg"
+    _img_search(sync_client).side_effect = exc
+
+    with pytest.raises(octen.OctenError) as info:
+        _image().invoke({"image_url": SIGNED_URL})
+
+    raised = info.value
+    rendered = "".join(
+        __import__("traceback").format_exception(type(raised), raised, raised.__traceback__)
+    )
+    for text in (str(raised), repr(raised), rendered):
+        assert "SECRET-TOKEN" not in text, text
+    assert type(raised) is octen.OctenError and raised.request_id == "rid-eg"
+    assert raised.__cause__ is None and raised.__context__ is None
 
 
 def test_raised_error_for_image_url_drops_notes_and_extras(sync_client: MagicMock) -> None:

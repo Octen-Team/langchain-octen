@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from fractions import Fraction
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 import octen
 from langchain_core.callbacks import (
@@ -110,24 +110,33 @@ _CURRENT_IMAGE_URL: ContextVar[Optional[str]] = ContextVar("_CURRENT_IMAGE_URL",
 
 
 def _without_upstream_text(exc: Exception) -> Exception:
-    """A copy of ``exc`` (same class, status and request id) without upstream text."""
-    # __new__ skips __init__, whose signature varies by class; only the safe metadata is
-    # copied, so notes and other attributes of the original do not carry over.
-    clean = type(exc).__new__(type(exc))
+    """``exc`` rebuilt without upstream text: the known Octen classes as themselves (with
+    their status, request id and retry metadata), anything else as a plain OctenError."""
+    kind, rid = type(exc), getattr(exc, "request_id", None)
     text = (
-        f"Octen Image Search failed for an image URL input ({type(exc).__name__}); the "
+        f"Octen Image Search failed for an image URL input ({kind.__name__}); the "
         "upstream message is withheld because it may contain the URL."
     )
-    clean.args = (text,)
-    if isinstance(exc, octen.OctenError):
-        setattr(clean, "message", text)
-    for attr in ("status_code", "request_id", "code", "timeout", "request_sent", "retry_after"):
-        if hasattr(exc, attr):
-            setattr(clean, attr, getattr(exc, attr))
-    for attr, empty in (("response_data", None), ("errors", [])):
-        if hasattr(exc, attr):
-            setattr(clean, attr, empty)
-    return clean
+    if kind is octen.OctenAPIError:
+        return octen.OctenAPIError(
+            text, status_code=getattr(exc, "status_code", None), request_id=rid
+        )
+    if kind is octen.OctenAuthenticationError:
+        return octen.OctenAuthenticationError(text, request_id=rid)
+    if kind is octen.OctenRateLimitError:
+        return octen.OctenRateLimitError(
+            text, retry_after=getattr(exc, "retry_after", None), request_id=rid
+        )
+    if kind is octen.OctenValidationError:
+        return octen.OctenValidationError(text)
+    if kind is octen.OctenTimeoutError:
+        timeout = getattr(exc, "timeout", None)
+        return octen.OctenTimeoutError(
+            text, timeout=timeout, request_sent=getattr(exc, "request_sent", None)
+        )
+    if kind is octen.OctenConnectionError:
+        return octen.OctenConnectionError(text, request_sent=getattr(exc, "request_sent", None))
+    return octen.OctenError(text, request_id=rid) if rid else octen.OctenError(text)
 
 
 _INSTANT = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)")
@@ -198,11 +207,11 @@ class OctenImageSearchInput(BaseModel):
             raise ValueError("must be a URL without control characters")
         if " " in value:  # ASCII only: other whitespace is left to the URL parser
             raise ValueError("must be a URL without spaces")
-        if _BAD_ESCAPE.search(value):
-            raise ValueError("must be a URL without malformed percent escapes")
         try:
-            parsed = urlparse(value)
-            ok = parsed.scheme.lower() == "https" and _valid_authority(parsed.netloc)
+            parsed = urlsplit(value)
+            # The server keeps the query and fragment raw; host and path escapes must parse.
+            escapes_ok = not any(_BAD_ESCAPE.search(p) for p in (parsed.netloc, parsed.path))
+            ok = parsed.scheme.lower() == "https" and _valid_authority(parsed.netloc) and escapes_ok
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
         except ValueError:  # e.g. an unclosed bracket or a bad port
             ok = False
