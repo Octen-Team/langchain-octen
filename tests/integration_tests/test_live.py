@@ -613,6 +613,7 @@ def test_design_search_developer_image_options() -> None:
         {"query": DESIGN_QUERY}
     )
     _check("design facts and snippets control", control)
+    assert len(control["data"]["images"]) == 2, control
     by_path = dict(zip(_paths(control["data"]["images"]), control["data"]["images"]))
     matched = [by_path[p] for p in _paths(images) if p in by_path]
     print(f"matched={len(matched)} snippets={[bool(i.get('snippet')) for i in matched]}")
@@ -625,7 +626,7 @@ def test_design_search_developer_image_options() -> None:
 WEB_DOMAIN = "dribbble.com"
 
 
-def test_design_search_developer_web_options() -> None:
+def test_design_search_developer_web_options(request_bodies: List[Any]) -> None:
     # The capped call first, so a dropped option fails before the control is billed.
     images_off = {"enable": False}
     web = {"include_domains": [WEB_DOMAIN], "highlight": {"enable": False}}
@@ -646,6 +647,12 @@ def test_design_search_developer_web_options() -> None:
     print(f"uncapped hosts={[urlparse(r['url']).hostname for r in uncapped]}")
     assert len(uncapped) > 2, control
     assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in uncapped), uncapped
+    # The highlight opt-out reached the API in both requests; the server-default call in
+    # the group test shows highlights are on otherwise.
+    sent = [body["web_search"] for body in request_bodies]
+    print(f"sent web_search={sent}")
+    assert [w.get("highlight", {}).get("enable") for w in sent] == [False, False], sent
+    assert [w.get("count") for w in sent] == [2, None], sent
 
 
 def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
@@ -658,23 +665,29 @@ def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
     assert hosts and any(not _on(h, WEB_DOMAIN) for h in hosts), hosts
     assert all(r.get("highlight") for r in data["results"]), data["results"]
     images = data["images"]
-    groups = [
-        i["group"]
+    seeds = [
+        i
         for i in images
-        if isinstance(i.get("group"), dict) and (i["group"].get("total") or 0) >= 3
+        if isinstance(i.get("group"), dict) and (i["group"].get("total") or 0) >= 2
     ]
-    assert groups, images
-    group_id = groups[0]["group_id"]
-    print(f"group={groups[0]}")
+    assert seeds, images
+    seed = seeds[0]
+    group_id, total, seat = (seed["group"][k] for k in ("group_id", "total", "position"))
+    print(f"group={seed['group']}")
     # The search mixed in images from other groups, so an all-in-group answer discriminates.
     assert any((i.get("group") or {}).get("group_id") != group_id for i in images), images
-    result = OctenDesignSearch(images={"count": 3}).invoke({"group_id": group_id})
+    requested = 3
+    result = OctenDesignSearch(images={"count": requested}).invoke({"group_id": group_id})
     _check("design group_id", result)
     got = result["data"]["images"]
     print(f"group ids={[i['group']['group_id'] for i in got]}")
     print(f"group positions={[i['group']['position'] for i in got]}")
-    assert [i["group"]["group_id"] for i in got] == [group_id] * 3, got
-    assert [i["group"]["position"] for i in got] == [1, 2, 3], got
+    # The group's ordered prefix, as long as the group or the requested count allows.
+    prefix = min(total, requested)
+    assert [i["group"]["group_id"] for i in got] == [group_id] * prefix, got
+    assert [i["group"]["position"] for i in got] == list(range(1, prefix + 1)), got
+    if seat <= prefix:
+        assert _paths([got[seat - 1]]) == _paths([seed]), (seed, got)
 
 
 def test_design_search_violations_send_nothing() -> None:
