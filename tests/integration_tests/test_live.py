@@ -2,7 +2,7 @@
 
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
 tool is invoked with a small result count: once, or for the Web Search Premier and
-Extract tests two calls (a call with the option and a same-input control). Extract bills
+Extract tests two or three calls (calls with the option and same-input controls). Extract bills
 each successfully read URL; the Extract tests read 11 at most.
 """
 
@@ -386,6 +386,8 @@ def test_extract_advanced_mode_reaches_server() -> None:
     _check("control", control)
     (item,), (plain,) = _items(advanced), _items(control)
     print(f"resolved_mode={item.get('resolved_mode')} control={plain.get('resolved_mode')}")
+    # octen documents that an advanced request may resolve to standard: re-check before
+    # calling a failure here a forwarding bug.
     assert item["status"] == "success" and item["resolved_mode"] == "advanced", item
     assert plain["resolved_mode"] == "standard", plain
 
@@ -403,15 +405,18 @@ def test_extract_text_format_reaches_server() -> None:
 
 
 def test_extract_links_reach_server() -> None:
+    # The control takes the server's default link cap (200) and must return more than 3.
+    control = OctenExtract(max_urls=1, include_links={}).invoke({"urls": [DOCS]})
+    _check("links control", control)
+    (plain,) = _items(control)
+    print(f"control links={len(plain.get('links') or [])}")
+    assert len(plain.get("links") or []) > 3, plain
     linked = OctenExtract(max_urls=1, include_links={"max_links": 3}).invoke({"urls": [DOCS]})
-    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
     _check("links", linked)
-    _check("control", control)
-    (item,), (plain,) = _items(linked), _items(control)
+    (item,) = _items(linked)
     print(f"links={item.get('links')}")
-    assert item.get("links") and len(item["links"]) <= 3, item
+    assert len(item.get("links") or []) == 3, item
     assert all(link.get("url") for link in item["links"]), item
-    assert not plain.get("links"), plain
 
 
 def test_extract_cap_rejects_without_request() -> None:

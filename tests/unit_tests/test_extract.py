@@ -285,6 +285,25 @@ def test_default_cap_rejects_six(sync_client: MagicMock) -> None:
     sync_client.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "make", [tuple, iter, lambda urls: dict.fromkeys(urls).keys()], ids=["tuple", "iter", "keys"]
+)
+def test_non_list_iterable_over_cap_never_sends(make: Any, sync_client: MagicMock) -> None:
+    # langchain validates the input and passes the validated list to _run.
+    result = _tool(max_urls=2).invoke({"urls": make(f"https://example.com/{i}" for i in range(3))})
+
+    assert isinstance(result, str) and "3 URLs" in result
+    sync_client.assert_not_called()
+
+
+def test_tuple_within_cap_is_sent_as_list(sync_client: MagicMock) -> None:
+    _tool().invoke({"urls": tuple(URLS)})
+
+    _extract(sync_client).assert_called_once_with(
+        urls=URLS, request_timeout=DEFAULT_REQUEST_TIMEOUT
+    )
+
+
 @pytest.mark.parametrize("cap", [1, 5, 20])
 def test_exactly_cap_is_sent(cap: int, sync_client: MagicMock) -> None:
     urls = [f"https://example.com/{i}" for i in range(cap)]
