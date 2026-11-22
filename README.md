@@ -323,8 +323,11 @@ splits errors the same way as the vertical search tools above.
   (`auto` picks per URL; `advanced` is priced higher). The aggregate usage counts in the
   response's `meta` are not part of the tool result.
 - **Two timeouts.** `url_timeout` is the server-side limit per URL (the API's `timeout`,
-  server default 30). `timeout` is the client-side limit for the whole call; left unset it
-  is `url_timeout` (or 30) plus 90 seconds. If you set it, keep it above `url_timeout`.
+  server default 30). `timeout` is the HTTP request timeout octen applies to each attempt
+  (passed as its `request_timeout`); left unset it is `url_timeout` (or 30) plus 90
+  seconds. It is not a deadline for the whole call: octen still retries 408, 429, 500,
+  502, 503 and 504 responses (see [Retries](#retries)), so a call can take longer across
+  attempts. If you set it, keep it above `url_timeout`.
 
 ```python
 from langchain_octen import OctenExtract

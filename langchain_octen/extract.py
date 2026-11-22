@@ -118,8 +118,9 @@ class OctenExtract(_OctenVerticalTool):
     """Return each page's links, e.g. ``{"scope": "prefer_external", "max_links": 50}``;
     ``{}`` uses the server defaults."""
     timeout: Optional[float] = None
-    """Client-side timeout for the whole call in seconds. Unset: ``url_timeout`` (or the
-    server default, 30) plus 90."""
+    """HTTP request timeout per attempt in seconds (octen's ``request_timeout``); octen's
+    retries of 408/429/5xx responses can make a call take longer. Unset: ``url_timeout``
+    (or 30) plus 90."""
 
     _sdk_method: ClassVar[Tuple[str, str]] = ("extract", "extract")
     _request_model: ClassVar[Any] = octen.ExtractRequest

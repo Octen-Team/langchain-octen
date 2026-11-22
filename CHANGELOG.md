@@ -24,9 +24,11 @@
     `error_message`; failed URLs are not billed). Each successful item's `resolved_mode`
     is the mode it was billed at. Return shape and error handling are the same as the
     vertical tools.
-  - Left unset, `timeout` (the client-side limit for the whole call) is `url_timeout`, or
-    the server default of 30, plus 90 seconds, so the client does not give up while the
-    server is still within its per-URL limit.
+  - Left unset, `timeout` (the HTTP request timeout octen applies to each attempt, passed
+    as its `request_timeout`) is `url_timeout`, or the server default of 30, plus 90
+    seconds, so the client does not give up while the server is still within its per-URL
+    limit. It is not a deadline for the whole call: octen still retries 408, 429, 500,
+    502, 503 and 504 responses.
 
 ### Changed
 
