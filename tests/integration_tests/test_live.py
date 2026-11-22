@@ -290,8 +290,9 @@ def test_search_premier_each_time_bound() -> None:
     _check("unfiltered", unfiltered)
     print(f"unfiltered time_published={_published(unfiltered)}")
     unfiltered_dated = [t for t in _published(unfiltered) if t]
-    assert any(t < start for t in unfiltered_dated), unfiltered
-    assert any(t > end for t in unfiltered_dated), unfiltered
+    stale = "the live index changed; pick a new TIME_QUERY / BOUND_WINDOW"
+    assert any(t < start for t in unfiltered_dated), f"no result before start: {stale}"
+    assert any(t > end for t in unfiltered_dated), f"no result after end: {stale}"
     end_only = OctenSearchPremier(count=10, time_basis="published", end_time=BOUND_WINDOW[1])
     start_only = OctenSearchPremier(count=10, time_basis="published", start_time=BOUND_WINDOW[0])
     before = end_only.invoke({"query": TIME_QUERY})
@@ -341,6 +342,8 @@ def test_extract_reads_pages() -> None:
     assert all(i["status"] == "success" for i in items), items
     assert all(i.get("full_content") and i.get("title") for i in items), items
     assert not any(i.get("highlights") for i in items), items
+    # Links are opt-in: without include_links none come back.
+    assert not any(i.get("links") for i in items), items
 
 
 @pytest.mark.asyncio
@@ -433,12 +436,20 @@ def test_extract_images_reach_server() -> None:
     _check("images control", control)
     (plain,) = _items(control)
     assert plain["status"] == "success" and not plain.get("images"), plain
+    assert not plain.get("cover_image"), plain
 
 
 def test_extract_max_age_reaches_server() -> None:
-    # time_last_crawled is when Octen last fetched the page; max_age_seconds=300 forces a
-    # refetch of any older copy. Allow 60 s for clock skew between here and the server.
-    margin = timedelta(seconds=60)
+    # Control first: the check only discriminates when the default-cache copy is stale.
+    # time_last_crawled is when Octen last fetched the page; allow 60 s of clock skew.
+    window, margin = timedelta(seconds=300), timedelta(seconds=60)
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("max_age control", control)
+    cached = _ts(_items(control)[0].get("time_last_crawled"))
+    print(f"control time_last_crawled={cached}")
+    assert cached is not None, control
+    if cached >= datetime.now(timezone.utc) - window - margin:
+        pytest.skip(f"inconclusive: the cached copy of {DOCS} is fresh ({cached})")
     sent = datetime.now(timezone.utc)
     fresh = OctenExtract(max_urls=1, max_age_seconds=300).invoke({"urls": [DOCS]})
     received = datetime.now(timezone.utc)
@@ -447,11 +458,8 @@ def test_extract_max_age_reaches_server() -> None:
     crawled = _ts(item.get("time_last_crawled"))
     print(f"sent={sent.isoformat()} time_last_crawled={crawled}")
     assert crawled is not None, item
-    assert sent - timedelta(seconds=300) - margin <= crawled <= received + margin, item
-    # Printed for the record: whether the default cache still serves an older copy.
-    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
-    _check("max_age control", control)
-    print(f"control time_last_crawled={_items(control)[0].get('time_last_crawled')}")
+    assert sent - window - margin <= crawled <= received + margin, item
+    assert crawled > cached, item
 
 
 def test_extract_cap_rejects_without_request() -> None:
