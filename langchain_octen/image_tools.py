@@ -11,7 +11,8 @@ import copy
 import ipaddress
 import re
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from fractions import Fraction
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
 
@@ -61,9 +62,9 @@ _IMAGE_DESCRIPTION = (
     "`width` and `height`, a `thumbnail` URL and, when available, a text `description` "
     "of the image.\n\n"
     "Pass exactly one input: `query` (text describing the images to find, max 500 "
-    "characters) or `image_url` (the public URL of an image, to find visually similar "
-    "images). Never both. include_domains / exclude_domains (up to 10 each) are matched "
-    "against each result's source page.\n\n"
+    "characters) or `image_url` (a public https URL of an image with a domain name, to "
+    "find visually similar images). Never both. include_domains / exclude_domains (up to "
+    "10 each) are matched against each result's source page.\n\n"
     "Use this when the user wants pictures, photos, diagrams, screenshots or other "
     "visual references, not for general text web search. When you show or cite an "
     "image, also give its source_page."
@@ -82,23 +83,25 @@ _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 # ASCII that cannot appear in a host; non-ASCII is left to the server, since a false
 # rejection of a valid internationalized host is worse than a server-side 4xx.
 _NOT_IN_HOST = frozenset("\\<>\"'`@[]")
-_BRACKETED = re.compile(r"\[([^\[\]]+)\](?::[0-9]*)?")
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def _valid_authority(netloc: str) -> bool:
-    """Raises ValueError for a malformed IPv6 literal."""
+    """A domain-name host: the API refuses IP addresses (so any [IPv6] literal) as hosts."""
     userinfo, _, hostport = netloc.rpartition("@")
     if any(ch in "@[]" for ch in userinfo):
         return False
-    if hostport.startswith("["):
-        # Exactly [addr] and an optional :port; Python 3.9's urlparse lets trailing text by.
-        match = _BRACKETED.fullmatch(hostport)
-        if match is None:
-            return False
-        ipaddress.IPv6Address(match.group(1))
-        return True
     host = hostport.split(":", 1)[0]
-    return bool(host) and not any(ch in _NOT_IN_HOST for ch in hostport)
+    if not host or any(ch in _NOT_IN_HOST for ch in hostport):
+        return False
+    return not _is_ip(host)
 
 
 # The model's image URL for the call in progress (None for a text query); a signed URL can
@@ -130,14 +133,15 @@ def _without_upstream_text(exc: Exception) -> Exception:
 _INSTANT = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)")
 
 
-def _instant(value: str) -> datetime:
-    """The instant of an RFC 3339 time already checked by ``_is_rfc3339``."""
+def _instant(value: str) -> Tuple[datetime, Fraction]:
+    """The UTC second and exact fraction of an RFC 3339 time checked by ``_is_rfc3339``."""
     match = _INSTANT.fullmatch(value)
     assert match is not None
     base, fraction, offset = match.groups()
-    # fromisoformat before 3.11 takes neither Z nor fractions other than 3 or 6 digits.
+    # fromisoformat before 3.11 takes no Z; the fraction is kept apart at full precision.
     moment = datetime.fromisoformat(base + ("+00:00" if offset == "Z" else offset))
-    return moment + timedelta(microseconds=int((fraction or "0")[:6].ljust(6, "0")))
+    exact = Fraction(int(fraction), 10 ** len(fraction)) if fraction else Fraction(0)
+    return moment.astimezone(timezone.utc), exact
 
 
 def _not_blank(value: Optional[str]) -> Optional[str]:
@@ -162,8 +166,8 @@ class OctenImageSearchInput(BaseModel):
     image_url: Optional[str] = Field(
         default=None,
         min_length=1,
-        description="Public http(s) URL of an image, to find visually similar images on "
-        "the web. Do not pass it together with query.",
+        description="Public https URL of an image, with a domain name (no IP address), to "
+        "find visually similar images on the web. Do not pass it together with query.",
     )
     include_domains: _Domains = Field(
         default=None,
@@ -186,20 +190,20 @@ class OctenImageSearchInput(BaseModel):
             return value
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
             raise ValueError("must be a URL without control characters")
-        if any(ch.isspace() for ch in value):
-            raise ValueError("must be a URL without spaces or line breaks")
+        if " " in value:  # ASCII only: other whitespace is left to the URL parser
+            raise ValueError("must be a URL without spaces")
         if _BAD_ESCAPE.search(value):
             raise ValueError("must be a URL without malformed percent escapes")
         try:
             parsed = urlparse(value)
-            ok = parsed.scheme.lower() in ("http", "https") and _valid_authority(parsed.netloc)
+            ok = parsed.scheme.lower() == "https" and _valid_authority(parsed.netloc)
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
-        except ValueError:  # e.g. an unclosed IPv6 bracket or a bad port
+        except ValueError:  # e.g. an unclosed bracket or a bad port
             ok = False
         if not ok:
             raise ValueError(
-                "must be the public http(s) URL of an image; base64 data and data: URIs "
-                "are not accepted"
+                "must be a public https URL of an image with a domain name (no IP address); "
+                "base64 data and data: URIs are not accepted"
             )
         return value
 

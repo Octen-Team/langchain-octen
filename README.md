@@ -351,15 +351,16 @@ same dict and splits errors the same way as the vertical search tools above.
 
 | Model arguments | Constructor options |
 |---|---|
-| exactly one of `query` (max 500 characters) or `image_url` (a public http(s) image URL); `include_domains`, `exclude_domains` (up to 10 each, matched against each result's source page) | `count` (1-10, server default 5), `safesearch` (`"off"` or `"strict"`, server default `strict`), `timeout` |
+| exactly one of `query` (max 500 characters) or `image_url` (a public https image URL with a domain name); `include_domains`, `exclude_domains` (up to 10 each, matched against each result's source page) | `count` (1-10, server default 5), `safesearch` (`"off"` or `"strict"`, server default `strict`), `timeout` |
 
 - **One input per call.** A call with both `query` and `image_url`, or with neither, is
   refused without a request and the model is told which to pass. The model can only pass an
   image by URL: base64 data and `data:` URIs are refused. To search with image bytes, call
   `octen.Octen().image_search.search(inputs=[{"type": "image", "data": ...}])` directly.
-  An `image_url` must have a host name and a valid port and contain no whitespace or
-  control characters, e.g.
-  `https://:443/photo.png` is refused too, and a blank `query` is refused.
+  An `image_url` must be an https URL with a domain name (the API refuses `http` and
+  IP-address hosts), a valid port and no ASCII spaces or control characters, so
+  `http://example.com/a.png`, `https://1.2.3.4/a.png` and `https://:443/photo.png` are
+  refused too; a blank `query` is refused as well.
 - **Image URLs stay out of logs.** A raised error is logged with its type, the input kind
   (`image URL` or `text query`) and the request id, not the URL or query, since a signed
   URL can carry a token. For an `image_url` call, an error handed to the model is a fixed

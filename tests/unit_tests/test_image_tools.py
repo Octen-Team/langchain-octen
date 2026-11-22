@@ -314,6 +314,10 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"query": "x" * 501}, "query"),
         ({"image_url": ""}, "image_url"),
         ({"image_url": "ftp://example.com/a.jpg"}, "image_url"),
+        ({"image_url": "http://example.com/a.jpg"}, "image_url"),
+        ({"image_url": "https://1.2.3.4/a.png"}, "image_url"),
+        ({"image_url": "https://[2001:db8::1]/a.png"}, "image_url"),
+        ({"image_url": "https://[2001:db8::1]:8443/a.png"}, "image_url"),
         ({"image_url": "data:image/png;base64,iVBORw0KGgo="}, "image_url"),
         ({"image_url": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}, "image_url"),
         ({"image_url": "https://"}, "image_url"),
@@ -353,6 +357,10 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "query-501",
         "url-empty",
         "url-ftp",
+        "url-http",
+        "url-ipv4",
+        "url-ipv6",
+        "url-ipv6-port",
         "url-data-uri",
         "url-base64",
         "url-no-host",
@@ -427,24 +435,25 @@ def test_image_model_cannot_set_developer_options(
         "https://",
         "https://example.com:abc/x.png",
         "https://example.com:70000/x.png",
+        "http://example.com/a.png",
+        "https://1.2.3.4/a.png",
+        "https://[2001:db8::1]/a.png",
     ],
     ids=repr,
 )
 def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) -> None:
     result = _image().invoke({"image_url": url})
 
-    assert isinstance(result, str) and "public http(s) URL of an image" in result, result
+    assert isinstance(result, str) and "public https URL of an image" in result, result
     sync_client.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "url",
     [
-        "http://example.com/a.png",
         "HTTPS://EXAMPLE.COM/A.PNG",
         "https://example.com:8443/a.png",
         "https://example.com/a%20b.png",
-        "https://[2001:db8::1]/a.png",
         "https://cdn_1.example.com/a.png",
         # An internationalized host with combining marks (Devanagari vowel signs).
         "https://\u0930\u093e\u091c\u092d\u093e\u0937\u093e.\u092d\u093e\u0930\u0924/a.png",
@@ -453,25 +462,24 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         # An Arabic label ending in a digit: valid IDNA2008, refused by Python's IDNA2003.
         "https://\u0645\u062b\u0627\u06441.\u0645\u0635\u0631/a.png",
         "https://xn--1-ymcl5hc.xn--wgbh1c/a.png",
-        "https://[2001:db8::1]:8443/a.png",
         "https://user:pass@example.com/a.png",
+        # A non-ASCII space (U+00A0) in the path is left to the URL parser and sent as is.
+        "https://example.com/caf\u00e9\u00a0menu.png",
     ],
     ids=[
-        "http",
         "upper",
         "port",
         "escape",
-        "ipv6",
         "underscore",
         "idn-marks",
         "punycode",
         "arabic-digit",
         "arabic-punycode",
-        "ipv6-port",
         "userinfo",
+        "nbsp-in-path",
     ],
 )
-def test_image_http_urls_accepted(url: str, sync_client: MagicMock) -> None:
+def test_image_https_urls_accepted(url: str, sync_client: MagicMock) -> None:
     _image().invoke({"image_url": url})
 
     _img_search(sync_client).assert_called_once_with(image_url=url)
@@ -1074,6 +1082,16 @@ def test_design_model_cannot_set_developer_options(
                 "web_search": {
                     "start_time": "2025-06-01T00:00:00Z",
                     "end_time": "2025-01-01T00:00:00Z",
+                }
+            },
+            "end_time",
+        ),
+        # Reversed by one nanosecond, below microsecond precision.
+        (
+            {
+                "web_search": {
+                    "start_time": "2025-01-01T00:00:00.0000000002Z",
+                    "end_time": "2025-01-01T00:00:00.0000000001Z",
                 }
             },
             "end_time",

@@ -7,11 +7,12 @@
 - `OctenImageSearch` (`octen_image_search`): Image Search, images on the web found by a text
   description or by a reference image.
   - The model passes exactly one of `query` (max 500 characters) or `image_url` (a public
-    http(s) URL), plus `include_domains` / `exclude_domains` (up to 10 each, matched against
+    https URL with a domain name), plus `include_domains` / `exclude_domains` (up to 10 each, matched against
     each result's source page). A call with both inputs or neither is refused without a
     request, and the model is told which to pass. Base64 images are not accepted from the
-    model; call `octen` directly for those. An `image_url` must be http(s) with a host name,
-    a valid port and no whitespace or control characters; a blank `query` is refused.
+    model; call `octen` directly for those. An `image_url` must be an https URL with a
+    domain name (the API refuses `http` and IP-address hosts), a valid port and no ASCII
+    spaces or control characters; a blank `query` is refused.
     Raised errors are logged with the input kind and request id, never the image URL or
     query. Errors for an `image_url` call reach the model as a fixed message without
     upstream text, and errors raised to the developer keep their class, status and request
