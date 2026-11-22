@@ -561,7 +561,13 @@ class OctenDesignSearch(_OctenVerticalTool):
                     f"invalid {self.name} option: web_search.{key}: unknown option "
                     f"{', '.join(unknown)}"
                 )
-        self._request_model(query=_PLACEHOLDER_QUERY, **options)
+        request = self._request_model(query=_PLACEHOLDER_QUERY, **options)
+        # Keep what octen validated (lists, not the caller's iterables) and send that on every
+        # call, so a filter cannot be consumed here and go missing from the requests.
+        for name in ("images", "web_search"):
+            if options[name] is not None:
+                setattr(self, name, getattr(request, name).model_dump(exclude_unset=True))
+        web = self.web_search or {}
         language = web.get("language") or []
         bad = sorted(set(language) - _LANGUAGES)
         if bad:

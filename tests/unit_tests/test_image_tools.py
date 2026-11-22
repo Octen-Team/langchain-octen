@@ -763,6 +763,49 @@ def test_design_list_options_are_sent_in_full(sync_client: MagicMock) -> None:
         assert list(sent["exclude_domains"]) == ["b.com"], sent
 
 
+class _OneShotIterable:
+    """Iterable, but not an iterator: __iter__ hands out the same stored iterator."""
+
+    def __init__(self, items: List[str]) -> None:
+        self._it = iter(items)
+
+    def __iter__(self) -> Any:
+        return self._it
+
+
+def test_design_stores_validated_lists(sync_client: MagicMock) -> None:
+    web = {
+        "language": _OneShotIterable(["en", "de"]),
+        "include_domains": _OneShotIterable(["a.com"]),
+        "exclude_domains": _OneShotIterable(["b.com"]),
+    }
+    tool = _design(web_search=web)
+
+    tool.invoke({"query": "q"})
+    tool.invoke({"query": "q"})
+
+    for call in _des_search(sync_client).call_args_list:
+        assert call.kwargs["web_search"] == {
+            "language": ["en", "de"],
+            "include_domains": ["a.com"],
+            "exclude_domains": ["b.com"],
+        }
+
+
+def test_design_stored_options_keep_only_what_was_set(sync_client: MagicMock) -> None:
+    # octen fills highlight's max_tokens on the wire; the stored option stays as given.
+    _design(web_search={"highlight": {"enable": False}}).invoke({"query": "q"})
+
+    _des_search(sync_client).assert_called_once_with(
+        query="q", web_search={"highlight": {"enable": False}}
+    )
+
+
+def test_design_bad_language_in_one_shot_iterable_still_raises() -> None:
+    with pytest.raises(ValueError, match="language"):
+        _design(web_search={"language": _OneShotIterable(["xx"])})
+
+
 def test_design_option_dicts_are_copied(sync_client: MagicMock) -> None:
     images = copy.deepcopy(IMAGES)
     web = copy.deepcopy(WEB)

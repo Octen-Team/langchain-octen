@@ -361,14 +361,18 @@ same dict and splits errors the same way as the vertical search tools above.
   IP-address hosts), a valid port and no ASCII spaces or control characters, so
   `http://example.com/a.png`, `https://1.2.3.4/a.png` and `https://:443/photo.png` are
   refused too; a blank `query` is refused as well.
-- **Image URLs stay out of logs.** A raised error is logged with its type, the input kind
-  (`image URL` or `text query`) and the request id, not the URL or query, since a signed
-  URL can carry a token. For an `image_url` call, an error handed to the model is a fixed
-  message (error type, status, request id and, by cause: try another image for a rejected
-  image, "temporarily unavailable" for a transient failure, or only the billing warning
-  when the call may have been billed) with no upstream text, and an error raised to your
-  code keeps its class, status and request id but not the upstream message, body or cause
-  (an exception that is not an `octen` error is raised as a plain `octen.OctenError`).
+- **Image URLs stay out of this package's logs and error messages.** A raised error is
+  logged with its type, the input kind (`image URL` or `text query`) and the request id, not
+  the URL or query, since a signed URL can carry a token. For an `image_url` call, an
+  error handed to the model is a fixed message (error type, status, request id and, by
+  cause: try another image for a rejected image, "temporarily unavailable" for a transient
+  failure, or only the billing warning when the call may have been billed) with no
+  upstream text, and an error raised to your code keeps its class, status and request id
+  but not the upstream message, body or cause (an exception that is not an `octen` error
+  is raised as a plain `octen.OctenError`).
+  LangChain's input tracing and callbacks record the raw tool arguments, `image_url`
+  included, before the tool runs: if the model may pass signed URLs, disable or redact
+  input tracing for this tool.
 - **A rejected image goes back to the model.** Unlike the other 4xx responses, 413 (image
   too large) and 415 (unsupported format) are returned to the model with a hint to try a
   smaller image, a supported format or another image URL. Authentication, access and
