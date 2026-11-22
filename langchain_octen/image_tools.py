@@ -8,6 +8,7 @@ the developer. ``data`` is the response's data, unchanged.
 from __future__ import annotations
 
 import copy
+import re
 from contextvars import ContextVar
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
@@ -75,9 +76,29 @@ _NO_INPUT = (
     "of an image, to find visually similar images). No request was made."
 )
 _Domains = Optional[List[str]]
+# A host name (letters of any script, digits, "-", "." and "_") or an IPv6 address.
+_HOST = re.compile(r"[\w.-]+|[0-9A-Fa-f:.]+")
 # The model's image URL for the call in progress (None for a text query); a signed URL can
 # carry a token, so logs name only the input kind and messages replace the URL.
 _CURRENT_IMAGE_URL: ContextVar[Optional[str]] = ContextVar("_CURRENT_IMAGE_URL", default=None)
+
+
+def _without_upstream_text(exc: Exception) -> Exception:
+    """A copy of ``exc`` (same class, status and request id) without upstream text."""
+    # __new__ skips __init__, whose signature varies by class.
+    clean = type(exc).__new__(type(exc))
+    clean.__dict__.update(exc.__dict__)
+    text = (
+        f"Octen Image Search failed for an image URL input ({type(exc).__name__}); the "
+        "upstream message is withheld because it may contain the URL."
+    )
+    clean.args = (text,)
+    for attr, value in (("message", text), ("response_data", None), ("errors", [])):
+        if hasattr(clean, attr):
+            setattr(clean, attr, value)
+    clean.__cause__ = clean.__context__ = None
+    clean.__traceback__ = None
+    return clean
 
 
 def _not_blank(value: Optional[str]) -> Optional[str]:
@@ -130,7 +151,8 @@ class OctenImageSearchInput(BaseModel):
             raise ValueError("must be a URL without spaces or line breaks")
         try:
             parsed = urlparse(value)
-            ok = parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+            host = parsed.hostname or ""
+            ok = parsed.scheme.lower() in ("http", "https") and bool(_HOST.fullmatch(host))
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
         except ValueError:  # e.g. an unclosed IPv6 bracket or a bad port
             ok = False
@@ -199,11 +221,23 @@ class OctenImageSearch(_OctenVerticalTool):
             details.append(f"status {status}")
         if request_id:
             details.append(f"request_id {request_id}")
+        if MAY_HAVE_BEEN_SENT in message:
+            # Possibly billed: no suggestion to try again, only the warning.
+            return f"Image search by image URL failed ({', '.join(details)}). {MAY_HAVE_BEEN_SENT}"
         hint = _IMAGE_INPUT_HINTS.get(status) if isinstance(status, int) else None
         fixed = (
             f"Image search by image URL failed ({', '.join(details)}). {hint or _IMAGE_URL_HINT}"
         )
-        return f"{fixed} {MAY_HAVE_BEEN_SENT}" if MAY_HAVE_BEEN_SENT in message else fixed
+        return fixed
+
+    def _failure(self, exc: Exception) -> Tuple[Optional[Exception], bool]:
+        if not _CURRENT_IMAGE_URL.get():
+            return super()._failure(exc)
+        # Image URL call: neither the result nor the chain may carry upstream text.
+        message = self._model_error(exc)
+        if message is not None:
+            return ToolException(message), False
+        return _without_upstream_text(exc), False
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         inputs = [{"type": "text", "data": _PLACEHOLDER_QUERY}]
@@ -382,12 +416,12 @@ class OctenDesignSearch(_OctenVerticalTool):
     @model_validator(mode="after")
     def _state_group_limit(self) -> "OctenDesignSearch":
         count = (self.images or {}).get("count")
+        if not self._images_enabled() and "args_schema" not in self.model_fields_set:
+            self.args_schema = OctenDesignSearchWebInput
         if "description" in self.model_fields_set:
             return self
         if not self._images_enabled():
             self.description = _DESIGN_WEB_ONLY_DESCRIPTION
-            if "args_schema" not in self.model_fields_set:
-                self.args_schema = OctenDesignSearchWebInput
         elif isinstance(count, int):
             self.description = _DESIGN_DESCRIPTION.format(limit=f"up to {count} images")
         return self

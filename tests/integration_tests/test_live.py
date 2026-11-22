@@ -665,28 +665,29 @@ def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
     assert hosts and any(not _on(h, WEB_DOMAIN) for h in hosts), hosts
     assert all(r.get("highlight") for r in data["results"]), data["results"]
     images = data["images"]
+    # The requested count is below the group's size and the API default (5), so an
+    # ignored count would return more images than asked for.
+    requested = 3
     seeds = [
         i
         for i in images
-        if isinstance(i.get("group"), dict) and (i["group"].get("total") or 0) >= 2
+        if isinstance(i.get("group"), dict) and (i["group"].get("total") or 0) > requested
     ]
     assert seeds, images
     seed = seeds[0]
-    group_id, total, seat = (seed["group"][k] for k in ("group_id", "total", "position"))
+    group_id, seat = seed["group"]["group_id"], seed["group"]["position"]
     print(f"group={seed['group']}")
     # The search mixed in images from other groups, so an all-in-group answer discriminates.
     assert any((i.get("group") or {}).get("group_id") != group_id for i in images), images
-    requested = 3
     result = OctenDesignSearch(images={"count": requested}).invoke({"group_id": group_id})
     _check("design group_id", result)
     got = result["data"]["images"]
     print(f"group ids={[i['group']['group_id'] for i in got]}")
     print(f"group positions={[i['group']['position'] for i in got]}")
-    # The group's ordered prefix, as long as the group or the requested count allows.
-    prefix = min(total, requested)
-    assert [i["group"]["group_id"] for i in got] == [group_id] * prefix, got
-    assert [i["group"]["position"] for i in got] == list(range(1, prefix + 1)), got
-    if seat <= prefix:
+    # Exactly the group's first `requested` images, in order.
+    assert [i["group"]["group_id"] for i in got] == [group_id] * requested, got
+    assert [i["group"]["position"] for i in got] == list(range(1, requested + 1)), got
+    if seat <= requested:
         assert _paths([got[seat - 1]]) == _paths([seed]), (seed, got)
 
 

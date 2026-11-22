@@ -328,6 +328,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "\x00https://example.com/a.png"}, "image_url"),
         ({"image_url": "https://example.com/a\x7f.png"}, "image_url"),
         ({"image_url": "https:///example.com/a.png"}, "image_url"),
+        ({"image_url": "https://\\example.com/a.png"}, "image_url"),
+        ({"image_url": "https://exa<mple.com/a.png"}, "image_url"),
         ({"query": "   "}, "query"),
         ({"query": "\t\n"}, "query"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
@@ -354,6 +356,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-leading-nul",
         "url-del-char",
         "url-empty-authority",
+        "url-backslash-authority",
+        "url-bad-host-char",
         "query-blank",
         "query-whitespace",
         "include-11",
@@ -762,6 +766,106 @@ def test_image_text_query_keeps_upstream_text(sync_client: MagicMock) -> None:
     result = _image().invoke({"query": "q"})
 
     assert isinstance(result, str) and str(exc) in result, result
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OctenTimeoutError(timeout=30.0, request_sent=True),
+     OctenAPIError("bad gateway", status_code=502),
+     OctenAPIError("API returned code 500", status_code=200)],
+    ids=["timeout", "502", "2xx-envelope"],
+)  # fmt: skip
+@pytest.mark.parametrize("args", [{"image_url": SIGNED_URL}, {"query": "q"}], ids=["url", "text"])
+def test_billing_warning_never_suggests_retrying(
+    exc: Exception, args: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke(args)
+
+    assert isinstance(result, str) and MAY_HAVE_BEEN_SENT in result, result
+    assert "Try " not in result and "try again" not in result.lower(), result
+
+
+SIGNED_403 = OctenAPIError(
+    f"forbidden for {SIGNED_URL}", status_code=403, response_data={"msg": SIGNED_URL},
+    request_id="rid-403",
+)  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [SIGNED_403,
+     OctenAuthenticationError(f"bad key {SIGNED_URL}", response_data=SIGNED_URL,
+                              request_id="rid-401"),
+     OctenValidationError(f"failed {SIGNED_URL}", errors=[{"input": SIGNED_URL}]),
+     RuntimeError(f"unexpected {SIGNED_URL}")],
+    ids=["403", "401", "validation", "runtime"],
+)  # fmt: skip
+def test_raised_error_for_image_url_is_sanitized(
+    exc: Exception, sync_client: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_octen"):
+        with pytest.raises(type(exc)) as info:
+            _image().invoke({"image_url": SIGNED_URL})
+
+    raised = info.value
+    rendered = "".join(
+        __import__("traceback").format_exception(type(raised), raised, raised.__traceback__)
+    )
+    for text in (str(raised), repr(raised), rendered, caplog.text):
+        assert "SECRET-TOKEN" not in text, text
+    assert raised.__cause__ is None and raised.__context__ is None
+    assert "SECRET-TOKEN" not in repr(getattr(raised, "response_data", None))
+    assert "SECRET-TOKEN" not in repr(getattr(raised, "errors", None))
+    for attr in ("status_code", "request_id"):
+        assert getattr(raised, attr, None) == getattr(exc, attr, None)
+    sync_client.return_value.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_raised_error_for_image_url_is_sanitized_async(async_client: MagicMock) -> None:
+    _img_search(async_client).side_effect = SIGNED_403
+
+    with pytest.raises(OctenAPIError) as info:
+        await _image().ainvoke({"image_url": SIGNED_URL})
+
+    assert "SECRET-TOKEN" not in str(info.value) and "SECRET-TOKEN" not in repr(info.value)
+    assert info.value.status_code == 403 and info.value.request_id == "rid-403"
+    assert info.value.__cause__ is None and info.value.__context__ is None
+
+
+def test_raised_error_for_text_query_is_unchanged(sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = SIGNED_403
+
+    with pytest.raises(OctenAPIError) as info:
+        _image().invoke({"query": "q"})
+
+    assert info.value is SIGNED_403
+
+
+def test_model_error_for_image_url_has_no_upstream_chain(sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = OctenAPIError(f"slow {SIGNED_URL}", status_code=503)
+    tool = _image(handle_tool_error=False)
+
+    with pytest.raises(ToolException) as info:
+        tool.invoke({"image_url": SIGNED_URL})
+
+    assert info.value.__cause__ is None and info.value.__context__ is None
+    assert "SECRET-TOKEN" not in repr(info.value)
+
+
+def test_design_without_images_custom_description_keeps_query_schema(
+    sync_client: MagicMock,
+) -> None:
+    tool = _design(images={"enable": False}, description="Find design pages.")
+    assert tool.description == "Find design pages."
+    assert set(tool.args) == {"query"}
+    result = tool.invoke({"query": "q", "group_id": GROUP_ID})
+    assert isinstance(result, str) and "group_id" in result
+    sync_client.assert_not_called()
 
 
 def test_design_without_images_schema_requires_query() -> None:

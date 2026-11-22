@@ -13,8 +13,9 @@
     model; call `octen` directly for those. An `image_url` must be http(s) with a host name,
     a valid port and no whitespace or control characters; a blank `query` is refused.
     Raised errors are logged with the input kind and request id, never the image URL or
-    query, and errors for an `image_url` call reach the model as a fixed message without
-    upstream text.
+    query. Errors for an `image_url` call reach the model as a fixed message without
+    upstream text, and errors raised to the developer keep their class, status and request
+    id but drop the upstream message, body and cause.
   - 413 (image too large) and 415 (unsupported format) are returned to the model with a hint
     to try another image, instead of being raised like other 4xx responses.
   - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor

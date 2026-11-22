@@ -363,7 +363,9 @@ same dict and splits errors the same way as the vertical search tools above.
 - **Image URLs stay out of logs.** A raised error is logged with its type, the input kind
   (`image URL` or `text query`) and the request id, not the URL or query, since a signed
   URL can carry a token. For an `image_url` call, an error handed to the model is a fixed
-  message (error type, status, request id and what to try next) with no upstream text.
+  message (error type, status, request id and what to try next, or only the billing warning
+  when the call may have been billed) with no upstream text, and an error raised to your
+  code keeps its class, status and request id but not the upstream message, body or cause.
 - **A rejected image goes back to the model.** Unlike the other 4xx responses, 413 (image
   too large) and 415 (unsupported format) are returned to the model with a hint to try a
   smaller image, a supported format or another image URL. Authentication, access and
