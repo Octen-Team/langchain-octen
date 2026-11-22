@@ -4,6 +4,9 @@ EXPECTED was captured by running _capture_sync() on langchain-octen 0.2.0
 (origin/main 20e047e) with octen 0.12.0, the version its poetry.lock pins; this branch
 runs the same inputs with octen 0.13.0. A difference means a 0.2.0 tool now sends a
 different request, whether from this package or from the octen upgrade.
+
+The octen_search_premier entry was captured the same way on this branch at b3cc8ad,
+with octen 0.13.0, before the Extract tool was added.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from langchain_octen import (
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
     OctenSearchResults,
 )
 
@@ -90,6 +94,27 @@ def _tools() -> List[Tuple[Any, Dict[str, Any]]]:
                 "radius": 500,
                 "user_location": {"city": "Tokyo"},
             },
+        ),
+        (
+            OctenSearchPremier(
+                octen_api_key=KEY,
+                count=3,
+                result_type="dynamic",
+                highlight={"enable": True, "max_tokens": 600},
+                full_content={"enable": True, "max_tokens": 1000},
+                include_text=["kafka"],
+                exclude_text=["ads"],
+                language=["en", "de"],
+                time_basis="published",
+                time_range="year",
+                start_time="2025-01-01T00:00:00Z",
+                end_time="2025-06-30T23:59:59+08:00",
+                format="markdown",
+                safesearch="off",
+                include_images=True,
+                timeout=9.0,
+            ),
+            {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]},
         ),
     ]
 
@@ -169,6 +194,31 @@ EXPECTED: Dict[str, Call] = {
             "places": {"count": 1},
         },
         None,
+    ),
+    # Captured at b3cc8ad with octen 0.13.0; see the module docstring.
+    "octen_search_premier": (
+        "POST",
+        "/search-premier",
+        {
+            "count": 3,
+            "include_domains": ["a.com"],
+            "exclude_domains": ["b.com"],
+            "language": ["en", "de"],
+            "time_basis": "published",
+            "time_range": "year",
+            "start_time": "2025-01-01T00:00:00Z",
+            "end_time": "2025-06-30T23:59:59+08:00",
+            "highlight": {"enable": True, "max_tokens": 600},
+            "full_content": {"enable": True, "max_tokens": 1000},
+            "query": "q",
+            "result_type": "dynamic",
+            "include_text": ["kafka"],
+            "exclude_text": ["ads"],
+            "format": "markdown",
+            "safesearch": "off",
+            "include_images": True,
+        },
+        9.0,
     ),
 }
 
