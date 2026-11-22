@@ -15,6 +15,8 @@ LangChain integration for [Octen Web Search](https://octen.ai). Use Octen's fast
 | `OctenPulseSearch` | `octen_pulse_search` | The URL of a docs page or site you could almost name |
 | `OctenPlaceSearch` | `octen_place_search` | Real-world places, near a point or in a city |
 | `OctenExtract` | `octen_extract` | The clean content of pages you already have the URLs of |
+| `OctenImageSearch` | `octen_image_search` | Images on the web, found by a text description or by a reference image URL |
+| `OctenDesignSearch` | `octen_design_search` | Design references: web pages, page sections, app screens and slides, with their design values |
 
 ## Installation
 
@@ -340,6 +342,76 @@ for item in result["data"]["results"]:
         print(item["url"], item.get("title"), len(item.get("full_content") or ""))
     else:
         print(item["url"], "failed:", item.get("error_message"))
+```
+
+## Image Search (`OctenImageSearch`)
+
+Finds images on the web from a text description or from a reference image. It returns the
+same dict and splits errors the same way as the vertical search tools above.
+
+| Model arguments | Constructor options |
+|---|---|
+| exactly one of `query` (max 500 characters) or `image_url` (a public http(s) image URL); `include_domains`, `exclude_domains` (up to 10 each, matched against each result's source page) | `count` (1-10, server default 5), `safesearch` (`"off"` or `"strict"`, server default `strict`), `timeout` |
+
+- **One input per call.** A call with both `query` and `image_url`, or with neither, is
+  refused without a request and the model is told which to pass. The model can only pass an
+  image by URL: base64 data and `data:` URIs are refused. To search with image bytes, call
+  `octen.Octen().image_search.search(inputs=[{"type": "image", "data": ...}])` directly.
+- **Trimmed results.** `data.results` keeps each image's `title`, `url`, `source_page`,
+  `description`, `width`, `height` and `thumbnail`; empty fields and fields the API reference
+  does not document are dropped. The response's `meta` (usage, latency) is not part of the
+  tool result; a non-empty `meta.warning` is returned as `warning`.
+
+```python
+from langchain_octen import OctenImageSearch
+
+tool = OctenImageSearch(count=5)
+result = tool.invoke({"query": "golden gate bridge at night"})
+for image in result["data"]["results"]:
+    print(image["url"], image.get("source_page"))
+
+similar = tool.invoke({"image_url": "https://example.com/photo.jpg"})
+```
+
+## Design Search (`OctenDesignSearch`)
+
+Finds design references for building or restyling a user interface or a slide deck. Each
+image result is a screenshot of a web page, a page section, an app screen or a slide (`type`)
+with its `url`, `thumbnail`, `title`, `description` and `source_page` (not for app screens),
+plus `design_facts` (colors, fonts, font sizes and the like) and reusable HTML in `snippet`
+when they are returned. Web results on the same query come back alongside in
+`data.results`.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query` (max 500 characters), `group_id` (at least one of the two) | `images` (`enable`, `count` 1-100, `design_facts`, `snippet`: `{"enable", "max_tokens"}`), `web_search` (`enable`, `count` 1-100, `highlight`, `full_content` (only the `enable` and `max_tokens` keys), `include_domains`, `exclude_domains`, `language` (ISO 639-1 codes), `time_basis`, `time_range`, `start_time`, `end_time` (RFC 3339)), `timeout` |
+
+- **Follow-up by group.** Sections of one web page and slides of one deck carry a `group`
+  (`group_id`, `type`, `name`, `position`, `total`, and for decks `master`). The model passes
+  that `group_id` to get the group's images in group order instead of a search; `query` may
+  then be omitted. A call with neither is refused without a request. `group_id` is the
+  model's: `images={"group_id": ...}` raises `ValueError` at construction. How many of the
+  group's images come back is your `images.count`.
+- **Size is yours.** Left unset, the server defaults apply: 5 images, each with
+  `design_facts` and a `snippet` of up to 5000 tokens where the image has reusable code, plus
+  5 web results with highlights. Turn off what your agent does not need, e.g.
+  `images={"snippet": {"enable": False}}` or `web_search={"enable": False}`.
+- **Trimmed results.** `data` keeps `query`, `images` and `results` with their documented
+  fields; empty fields, other fields the server adds, and each web result's `favicon` and
+  in-body `images` are dropped. A part you turned off is absent from `data`.
+
+```python
+from langchain_octen import OctenDesignSearch
+
+tool = OctenDesignSearch(
+    images={"count": 5, "snippet": {"max_tokens": 2000}},
+    web_search={"count": 3},
+)
+result = tool.invoke({"query": "pricing section for a SaaS landing page"})
+for image in result["data"].get("images", []):
+    print(image["type"], image["url"], (image.get("group") or {}).get("group_id"))
+
+deck = tool.invoke({"group_id": "<group.group_id of an earlier result>"})
 ```
 
 ## Retries

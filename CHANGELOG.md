@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- `OctenImageSearch` (`octen_image_search`): Image Search, images on the web found by a text
+  description or by a reference image.
+  - The model passes exactly one of `query` (max 500 characters) or `image_url` (a public
+    http(s) URL), plus `include_domains` / `exclude_domains` (up to 10 each, matched against
+    each result's source page). A call with both inputs or neither is refused without a
+    request, and the model is told which to pass. Base64 images are not accepted from the
+    model; call `octen` directly for those.
+  - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor
+    options, checked when the tool is built.
+  - `data.results` keeps each image's documented fields (`title`, `url`, `source_page`,
+    `description`, `width`, `height`, `thumbnail`); empty and undocumented fields are
+    dropped.
+- `OctenDesignSearch` (`octen_design_search`): Design Search, design references (web pages,
+  page sections, app screens and slides) with their design values, plus web results on the
+  same query.
+  - The model passes `query` (max 500 characters), `group_id` or both. `group_id` is the
+    `group.group_id` of an earlier image result and returns that page's or deck's images in
+    group order instead of a search. A call with neither is refused without a request.
+  - `images` (`enable`, `count`, `design_facts`, `snippet`) and `web_search` (`enable`,
+    `count`, `highlight`, `full_content`, domain, language and time filters) and `timeout`
+    are constructor options, checked when the tool is built: `images.group_id` is refused
+    (it is the model's), `highlight` and `full_content` accept only the `enable` and
+    `max_tokens` keys, `language` must be one of the documented ISO 639-1 codes and
+    `start_time` / `end_time` must be RFC 3339 times. Left unset, the server defaults apply,
+    including `design_facts` and snippets of up to 5000 tokens per image.
+  - `data` keeps `query`, `images` and `results` with their documented fields; empty and
+    undocumented fields, and each web result's `favicon` and in-body `images`, are dropped.
+- Both tools return `{"data", "request_id", "warning"}` and split errors like the other
+  vertical tools. A 2xx response whose results are not the documented shape goes to the
+  model as a possibly billed failure.
+
+The existing tools are unchanged: same parameters, same requests, same return shape. The
+new tools are separate classes; nothing is added to an agent unless you pass them in.
+`octen>=0.13.0,<1.0.0` already provides both endpoints, so the dependency range is unchanged.
+
 ## 0.3.0
 
 ### Added
