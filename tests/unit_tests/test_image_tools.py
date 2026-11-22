@@ -317,6 +317,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://"}, "image_url"),
         ({"image_url": "https://:443/photo.png"}, "image_url"),
         ({"image_url": "https://[example.com/x.jpg"}, "image_url"),
+        ({"image_url": "https://example.com:abc/x.png"}, "image_url"),
+        ({"image_url": "https://example.com:70000/x.png"}, "image_url"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
         ({"query": "q", "exclude_domains": [f"d{i}.com" for i in range(11)]}, "exclude_domains"),
         ({"query": "q", "include_domains": "a.com"}, "include_domains"),
@@ -332,6 +334,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-no-host",
         "url-port-only",
         "url-unparseable",
+        "url-port-not-numeric",
+        "url-port-out-of-range",
         "include-11",
         "exclude-11",
         "domains-not-list",
@@ -370,7 +374,15 @@ def test_image_model_cannot_set_developer_options(
 
 
 @pytest.mark.parametrize(
-    "url", ["https://:443/photo.png", "https://[example.com/x.jpg", "https://"], ids=repr
+    "url",
+    [
+        "https://:443/photo.png",
+        "https://[example.com/x.jpg",
+        "https://",
+        "https://example.com:abc/x.png",
+        "https://example.com:70000/x.png",
+    ],
+    ids=repr,
 )
 def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) -> None:
     result = _image().invoke({"image_url": url})
@@ -379,7 +391,10 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
     sync_client.assert_not_called()
 
 
-@pytest.mark.parametrize("url", ["http://example.com/a.png", "HTTPS://EXAMPLE.COM/A.PNG"])
+@pytest.mark.parametrize(
+    "url",
+    ["http://example.com/a.png", "HTTPS://EXAMPLE.COM/A.PNG", "https://example.com:8443/a.png"],
+)
 def test_image_http_urls_accepted(url: str, sync_client: MagicMock) -> None:
     _image().invoke({"image_url": url})
 
@@ -450,6 +465,24 @@ def test_design_name_and_model_args() -> None:
     tool = _design()
     assert tool.name == "octen_design_search"
     assert set(tool.args) == {"query", "group_id"}
+
+
+@pytest.mark.parametrize(
+    ("images", "expected"),
+    [(None, "up to 5 images (the default)"), ({"count": 30}, "up to 30 images"),
+     ({"design_facts": False}, "up to 5 images (the default)")],
+    ids=["unset", "count-30", "count-unset"],
+)  # fmt: skip
+def test_design_description_states_group_image_limit(images: Any, expected: str) -> None:
+    description = _design(images=images).description
+    assert f"returns the first images of that group in group order, {expected}" in description
+    assert "every image" not in description and "all images" not in description
+
+
+def test_design_custom_description_kept() -> None:
+    assert _design(images={"count": 3}, description="Find designs.").description == (
+        "Find designs."
+    )
 
 
 def test_design_description_explains_group_follow_up() -> None:

@@ -393,10 +393,11 @@ when they are returned. Web results on the same query come back alongside in
 
 - **Follow-up by group.** Sections of one web page and slides of one deck carry a `group`
   (`group_id`, `type`, `name`, `position`, `total`, and for decks `master`). The model passes
-  that `group_id` to get the group's images in group order instead of a search; `query` may
-  then be omitted. A call with neither is refused without a request. `group_id` is the
-  model's: `images={"group_id": ...}` raises `ValueError` at construction. How many of the
-  group's images come back is your `images.count`.
+  that `group_id` to get the first images of the group in group order instead of a search;
+  `query` may then be omitted. It gets at most `images.count` of them (5, the API default,
+  when unset), not necessarily the whole group, and the tool description states that limit.
+  A call with neither is refused without a request. `group_id` is the model's:
+  `images={"group_id": ...}` raises `ValueError` at construction.
 - **Large output by default.** Left unset, the server defaults apply: 5 images, each with
   `design_facts` and a `snippet` of up to 5000 tokens where the image has reusable code, plus
   5 web results with highlights. That can be a lot of text for a model. Turn off or shorten

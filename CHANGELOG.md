@@ -19,8 +19,9 @@
   page sections, app screens and slides) with their design values, plus web results on the
   same query.
   - The model passes `query` (max 500 characters), `group_id` or both. `group_id` is the
-    `group.group_id` of an earlier image result and returns that page's or deck's images in
-    group order instead of a search. A call with neither is refused without a request.
+    `group.group_id` of an earlier image result and returns the first images of that page
+    or deck in group order instead of a search, at most `images.count` (5 by default); the
+    tool description states the limit. A call with neither is refused without a request.
   - `images` (`enable`, `count`, `design_facts`, `snippet`) and `web_search` (`enable`,
     `count`, `highlight`, `full_content`, domain, language and time filters) and `timeout`
     are constructor options, checked when the tool is built: `images.group_id` is refused

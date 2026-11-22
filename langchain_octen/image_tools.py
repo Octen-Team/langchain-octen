@@ -110,7 +110,8 @@ class OctenImageSearchInput(BaseModel):
         try:
             parsed = urlparse(value)
             ok = parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
-        except ValueError:  # e.g. an unclosed IPv6 bracket
+            parsed.port  # raises ValueError on a non-numeric or out-of-range port
+        except ValueError:  # e.g. an unclosed IPv6 bracket or a bad port
             ok = False
         if not ok:
             raise ValueError(
@@ -207,10 +208,13 @@ _DESIGN_DESCRIPTION = (
     "Pass `query` (max 500 characters) describing what to find, e.g. 'pricing section "
     "for a SaaS landing page' or 'iOS onboarding screen'.\n\n"
     "Sections of one web page and slides of one deck carry a `group` (group_id, type, "
-    "name, position, total). To get the images of that page or deck in group order, "
-    "call again with `group_id` set to that result's group.group_id; `query` may then "
-    "be omitted. With `group_id` the images come from that group instead of a search."
+    "name, position, total). Calling again with `group_id` set to that result's "
+    "group.group_id returns the first images of that group in group order, {limit}, "
+    "instead of a search; `query` may then be omitted. `position` and `total` show "
+    "where each image sits in its group."
 )
+# The API's default for images.count.
+_DESIGN_DEFAULT_IMAGES = 5
 
 _NO_QUERY_OR_GROUP = (
     "Pass `query` to search for design references, or `group_id` (the group.group_id "
@@ -238,8 +242,8 @@ class OctenDesignSearchInput(BaseModel):
     group_id: Optional[StrictStr] = Field(
         default=None,
         min_length=1,
-        description="The group.group_id of an earlier image result, to get the images of "
-        "that web page or deck in group order instead of searching.",
+        description="The group.group_id of an earlier image result, to get the first "
+        "images of that web page or deck in group order instead of searching.",
     )
 
     @model_validator(mode="after")
@@ -272,7 +276,9 @@ class OctenDesignSearch(_OctenVerticalTool):
     """
 
     name: str = "octen_design_search"
-    description: str = _DESIGN_DESCRIPTION
+    description: str = _DESIGN_DESCRIPTION.format(
+        limit=f"up to {_DESIGN_DEFAULT_IMAGES} images (the default)"
+    )
     args_schema: Type[BaseModel] = OctenDesignSearchInput
 
     images: Optional[Dict[str, Any]] = None
@@ -291,6 +297,13 @@ class OctenDesignSearch(_OctenVerticalTool):
     def _copy_images(cls, value: Any) -> Any:
         # Keep a private copy: later changes to the caller's dict must not leak in.
         return copy.deepcopy(value)
+
+    @model_validator(mode="after")
+    def _state_group_limit(self) -> "OctenDesignSearch":
+        count = (self.images or {}).get("count")
+        if "description" not in self.model_fields_set and isinstance(count, int):
+            self.description = _DESIGN_DESCRIPTION.format(limit=f"up to {count} images")
+        return self
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         images, web = options["images"] or {}, options["web_search"] or {}
