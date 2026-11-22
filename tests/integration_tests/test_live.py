@@ -4,7 +4,7 @@ Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so e
 tool is invoked with a small result count: once, or for the Web Search Premier, Extract,
 Image Search and Design Search tests two or three calls (calls with the option and
 same-input controls). Extract bills each successfully read URL; the Extract tests read 15
-at most. The Image Search and Design Search tests make 9 calls.
+at most. The Image Search and Design Search tests make 10 calls.
 """
 
 from __future__ import annotations
@@ -551,6 +551,13 @@ def test_image_search_by_url(request_bodies: List[Any]) -> None:
     assert request_bodies[0]["inputs"] == [{"type": "image", "url": REFERENCE_IMAGE}]
     assert 0 < len(result["data"]["results"]) <= 3, result
     assert all(r.get("url") for r in result["data"]["results"]), result
+    # The photo shows the Golden Gate Bridge: a result naming it shows the image was used.
+    about = [
+        f"{r.get('title') or ''} {r.get('description') or ''} {r.get('source_page') or ''}"
+        for r in result["data"]["results"]
+    ]
+    print(f"image_url about={about}")
+    assert any(re.search(r"golden.?gate", text, re.IGNORECASE) for text in about), about
 
 
 def test_image_search_violations_send_nothing() -> None:
@@ -581,66 +588,94 @@ def design_control() -> Dict[str, Any]:
     return result
 
 
-def test_design_search_developer_image_options(design_control: Dict[str, Any]) -> None:
-    tool = OctenDesignSearch(
+def _paths(images: List[Dict[str, Any]]) -> List[str]:
+    # Image URLs are signed per response; the path identifies the image.
+    return [urlparse(i["url"]).path for i in images]
+
+
+def test_design_search_developer_image_options() -> None:
+    # Facts and snippets off first, so a dropped option fails before the control is billed.
+    web_off = {"enable": False}
+    off = OctenDesignSearch(
         images={"count": 2, "design_facts": False, "snippet": {"enable": False}},
-        web_search={"enable": False},
-    )
-    result = tool.invoke({"query": DESIGN_QUERY})
-    _check("design images options", result)
-    images = result["data"]["images"]
-    print(f"types={[i.get('type') for i in images]} keys={sorted(result['data'])}")
-    assert len(images) == 2, result
+        web_search=web_off,
+    ).invoke({"query": DESIGN_QUERY})
+    _check("design facts and snippets off", off)
+    images = off["data"]["images"]
+    print(f"types={[i.get('type') for i in images]} keys={sorted(off['data'])}")
+    assert len(images) == 2, off
     assert all(i.get("url") and i.get("type") for i in images), images
     # data is unchanged, so a turned-off part may be absent or empty.
     assert not any(i.get("design_facts") or i.get("snippet") for i in images), images
-    assert not result["data"].get("results"), result
-    # The control, with server defaults, differs on each of those.
-    control = design_control["data"]
-    assert len(control["images"]) > 2, control
-    assert any(i.get("design_facts") for i in control["images"]), control
-    assert any(i.get("snippet") for i in control["images"]), control
-    assert control.get("results"), control
-
-
-def test_design_search_developer_web_options(design_control: Dict[str, Any]) -> None:
-    control = design_control["data"]["results"]
-    hosts = [urlparse(r["url"]).hostname or "" for r in control]
-    print(f"control web hosts={hosts}")
-    assert len(control) > 2 and all(r.get("highlight") for r in control), control
-    kept = _registered(hosts[0])
-    assert any(not _on(h, kept) for h in hosts), hosts
-    tool = OctenDesignSearch(
-        images={"enable": False},
-        web_search={"count": 2, "include_domains": [kept], "highlight": {"enable": False}},
+    assert not off["data"].get("results"), off
+    # Same query and count with the server defaults for facts and snippets.
+    control = OctenDesignSearch(images={"count": 2}, web_search=web_off).invoke(
+        {"query": DESIGN_QUERY}
     )
-    result = tool.invoke({"query": DESIGN_QUERY})
-    _check("design web options", result)
-    web = result["data"]["results"]
-    print(f"web hosts={[urlparse(r['url']).hostname for r in web]}")
-    assert not result["data"].get("images"), result
-    assert 0 < len(web) <= 2, result
-    assert all(_on(urlparse(r["url"]).hostname or "", kept) for r in web), web
+    _check("design facts and snippets control", control)
+    shown = control["data"]["images"]
+    print(f"control snippets={[bool(i.get('snippet')) for i in shown]}")
+    assert _paths(shown) == _paths(images), (shown, images)
+    assert all(i.get("design_facts") for i in shown), shown
+    assert any(i.get("snippet") for i in shown), shown
+
+
+# A domain with many pages for DESIGN_QUERY, so the uncapped control returns more than 2.
+WEB_DOMAIN = "dribbble.com"
+
+
+def test_design_search_developer_web_options() -> None:
+    # The capped call first, so a dropped option fails before the control is billed.
+    images_off = {"enable": False}
+    capped = OctenDesignSearch(
+        images=images_off,
+        web_search={"count": 2, "include_domains": [WEB_DOMAIN], "highlight": {"enable": False}},
+    ).invoke({"query": DESIGN_QUERY})
+    _check("design web capped", capped)
+    web = capped["data"]["results"]
+    print(f"capped hosts={[urlparse(r['url']).hostname for r in web]}")
+    assert not capped["data"].get("images"), capped
+    assert 0 < len(web) <= 2, capped
+    assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in web), web
     assert not any(r.get("highlight") for r in web), web
+    # Same domain filter, no cap and default highlights.
+    control = OctenDesignSearch(
+        images=images_off, web_search={"include_domains": [WEB_DOMAIN]}
+    ).invoke({"query": DESIGN_QUERY})
+    _check("design web control", control)
+    uncapped = control["data"]["results"]
+    print(f"uncapped hosts={[urlparse(r['url']).hostname for r in uncapped]}")
+    assert len(uncapped) > len(web), control
+    assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in uncapped), uncapped
+    assert all(r.get("highlight") for r in uncapped), uncapped
 
 
 def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
-    grouped = [i for i in design_control["data"]["images"] if i.get("group")]
-    assert grouped, design_control
-    group = grouped[0]["group"]
-    print(f"group={group}")
-    # The search mixed images from outside the group, so an all-in-group answer discriminates.
-    others = [i for i in design_control["data"]["images"] if i.get("group") != group]
-    assert others, design_control
-    result = OctenDesignSearch(images={"count": 3}).invoke({"group_id": group["group_id"]})
+    # Server defaults, the controls for the options above: more than 2 images, and web
+    # results on several domains.
+    data = design_control["data"]
+    hosts = [urlparse(r["url"]).hostname or "" for r in data.get("results") or []]
+    print(f"default images={len(data['images'])} web hosts={hosts}")
+    assert len(data["images"]) > 2, data
+    assert hosts and any(not _on(h, WEB_DOMAIN) for h in hosts), hosts
+    images = data["images"]
+    groups = [
+        i["group"]
+        for i in images
+        if isinstance(i.get("group"), dict) and (i["group"].get("total") or 0) >= 3
+    ]
+    assert groups, images
+    group_id = groups[0]["group_id"]
+    print(f"group={groups[0]}")
+    # The search mixed in images from other groups, so an all-in-group answer discriminates.
+    assert any((i.get("group") or {}).get("group_id") != group_id for i in images), images
+    result = OctenDesignSearch(images={"count": 3}).invoke({"group_id": group_id})
     _check("design group_id", result)
-    images = result["data"]["images"]
-    positions = [i["group"]["position"] for i in images]
-    print(f"group positions={positions} total={images[0]['group'].get('total')}")
-    print(f"group call data keys={sorted(result['data'])}")
-    assert 0 < len(images) <= 3, result
-    assert all(i["group"]["group_id"] == group["group_id"] for i in images), images
-    assert positions == sorted(positions), positions
+    got = result["data"]["images"]
+    print(f"group ids={[i['group']['group_id'] for i in got]}")
+    print(f"group positions={[i['group']['position'] for i in got]}")
+    assert [i["group"]["group_id"] for i in got] == [group_id] * 3, got
+    assert [i["group"]["position"] for i in got] == [1, 2, 3], got
 
 
 def test_design_search_violations_send_nothing() -> None:
