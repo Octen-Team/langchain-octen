@@ -49,7 +49,7 @@ _DESCRIPTION = (
     "tool.\n\n"
     "Each URL succeeds or fails on its own: a page that could not be read comes back "
     'with status "failed" and an `error_message`, while the other URLs still return '
-    "their content."
+    "their content. Match results to your URLs by each item's `url`, not by position."
 )
 
 
@@ -79,8 +79,9 @@ class OctenExtract(_OctenVerticalTool):
     """Octen Extract: clean content of web pages, read by URL.
 
     Returns ``{"data": ..., "request_id": ..., "warning"?: ...}`` where
-    ``data["results"]`` holds one item per requested URL, in request order, failures
-    included (``status: "failed"`` with ``error_message``; failed URLs are not billed).
+    ``data["results"]`` holds the per-URL items, failures included (``status: "failed"``
+    with ``error_message``; failed URLs are not billed). Match them to the requested URLs
+    by each item's ``url``, not by position.
     Each successful item's ``resolved_mode`` is the mode it was billed at.
 
     Instantiate:

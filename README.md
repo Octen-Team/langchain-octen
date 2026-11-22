@@ -313,12 +313,13 @@ splits errors the same way as the vertical search tools above.
 - **`max_urls` caps each call.** A call with more URLs is refused without a request, and
   the model is told how many it sent and to split them into several calls. The tool
   description tells the model the cap. Each URL must be 1-2048 characters.
-- **Every URL comes back.** `data.results` has one item per requested URL, in request
-  order: `status` is `"success"` (with `title`, `full_content` or `highlights`,
-  `time_published` / `time_last_crawled` when known, `category`, `page_structure`, and
-  media or links only if you enabled them) or `"failed"` with an `error_message`. Failed
-  URLs are not billed; the server then attaches a `warning` such as
-  `"1 URL(s) failed and were not billed"`. Content is not truncated.
+- **Failures are reported per URL.** `data.results` holds the per-URL items; match them
+  to your inputs by each item's `url`, not by position. `status` is `"success"` (with
+  `title`, `full_content` or `highlights`, `time_published` / `time_last_crawled` when
+  known, `category`, `page_structure`, and media or links only if you enabled them) or
+  `"failed"` with an `error_message`. Failed URLs are not billed; the server then
+  attaches a `warning` such as `"1 URL(s) failed and were not billed"`. Content is not
+  truncated.
 - **Billing.** `resolved_mode` on each successful item is the mode it was billed at
   (`auto` picks per URL; `advanced` is priced higher). The aggregate usage counts in the
   response's `meta` are not part of the tool result.

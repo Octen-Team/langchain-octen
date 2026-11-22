@@ -127,6 +127,7 @@ def test_description_states_cap_and_per_url_failures() -> None:
     description = _tool(max_urls=3).description
     assert "at most 3 URLs" in description
     assert "failed" in description and "error_message" in description
+    assert "by each item's `url`, not by position" in description
 
 
 def test_description_names_no_developer_option() -> None:

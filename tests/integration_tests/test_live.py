@@ -432,6 +432,7 @@ def test_extract_images_reach_server() -> None:
     print(f"images={item.get('images')!r:.300} cover_image={item.get('cover_image')}")
     assert item["status"] == "success" and item.get("images"), item
     assert all(image.get("url") for image in item["images"]), item
+    assert (item.get("cover_image") or {}).get("url"), item
     control = OctenExtract(max_urls=1).invoke({"urls": [WITH_IMAGES]})
     _check("images control", control)
     (plain,) = _items(control)
