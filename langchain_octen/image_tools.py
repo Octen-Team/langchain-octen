@@ -8,6 +8,7 @@ the developer. ``data`` is the response's data, unchanged.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import re
 from contextvars import ContextVar
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
@@ -76,8 +77,19 @@ _NO_INPUT = (
     "of an image, to find visually similar images). No request was made."
 )
 _Domains = Optional[List[str]]
-# A host name (letters of any script, digits, "-", "." and "_") or an IPv6 address.
-_HOST = re.compile(r"[\w.-]+|[0-9A-Fa-f:.]+")
+# A DNS host in its IDNA ASCII form: dot-separated labels of letters, digits, "-" and "_".
+_DNS_HOST = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.?", re.ASCII)
+_BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+def _valid_host(host: str) -> bool:
+    """Raises ValueError (UnicodeError included) for a host that cannot be valid."""
+    if ":" in host:  # urlparse strips the brackets of an IPv6 literal
+        ipaddress.IPv6Address(host)
+        return True
+    return bool(_DNS_HOST.fullmatch(host.encode("idna").decode("ascii")))
+
+
 # The model's image URL for the call in progress (None for a text query); a signed URL can
 # carry a token, so logs name only the input kind and messages replace the URL.
 _CURRENT_IMAGE_URL: ContextVar[Optional[str]] = ContextVar("_CURRENT_IMAGE_URL", default=None)
@@ -149,12 +161,14 @@ class OctenImageSearchInput(BaseModel):
             raise ValueError("must be a URL without control characters")
         if any(ch.isspace() for ch in value):
             raise ValueError("must be a URL without spaces or line breaks")
+        if _BAD_ESCAPE.search(value):
+            raise ValueError("must be a URL without malformed percent escapes")
         try:
             parsed = urlparse(value)
             host = parsed.hostname or ""
-            ok = parsed.scheme.lower() in ("http", "https") and bool(_HOST.fullmatch(host))
+            ok = parsed.scheme.lower() in ("http", "https") and _valid_host(host)
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
-        except ValueError:  # e.g. an unclosed IPv6 bracket or a bad port
+        except ValueError:  # e.g. an unclosed IPv6 bracket, a bad port or IDNA failure
             ok = False
         if not ok:
             raise ValueError(

@@ -330,6 +330,11 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https:///example.com/a.png"}, "image_url"),
         ({"image_url": "https://\\example.com/a.png"}, "image_url"),
         ({"image_url": "https://exa<mple.com/a.png"}, "image_url"),
+        ({"image_url": "https://exa%zzmple.com/a.png"}, "image_url"),
+        ({"image_url": "https://example.com/a%zz.png"}, "image_url"),
+        ({"image_url": "https://example.com/a%4.png"}, "image_url"),
+        ({"image_url": "https://a..b.com/a.png"}, "image_url"),
+        ({"image_url": "https://[2001:zz::1]/a.png"}, "image_url"),
         ({"query": "   "}, "query"),
         ({"query": "\t\n"}, "query"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
@@ -358,6 +363,11 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-empty-authority",
         "url-backslash-authority",
         "url-bad-host-char",
+        "url-bad-escape-in-host",
+        "url-bad-escape-in-path",
+        "url-short-escape",
+        "url-empty-label",
+        "url-bad-ipv6",
         "query-blank",
         "query-whitespace",
         "include-11",
@@ -417,7 +427,19 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
 
 @pytest.mark.parametrize(
     "url",
-    ["http://example.com/a.png", "HTTPS://EXAMPLE.COM/A.PNG", "https://example.com:8443/a.png"],
+    [
+        "http://example.com/a.png",
+        "HTTPS://EXAMPLE.COM/A.PNG",
+        "https://example.com:8443/a.png",
+        "https://example.com/a%20b.png",
+        "https://[2001:db8::1]/a.png",
+        "https://cdn_1.example.com/a.png",
+        # An internationalized host with combining marks (Devanagari vowel signs).
+        "https://\u0930\u093e\u091c\u092d\u093e\u0937\u093e.\u092d\u093e\u0930\u0924/a.png",
+        # The same kind of host in its punycode (IDNA ASCII) form.
+        "https://xn--81b8ah4a6acb.xn--h2brj9c/a.png",
+    ],
+    ids=["http", "upper", "port", "escape", "ipv6", "underscore", "idn-marks", "punycode"],
 )
 def test_image_http_urls_accepted(url: str, sync_client: MagicMock) -> None:
     _image().invoke({"image_url": url})
