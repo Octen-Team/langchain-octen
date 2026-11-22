@@ -41,16 +41,9 @@ IMAGE_ITEM: Dict[str, Any] = {
 }
 IMAGE_DATA: Dict[str, Any] = {
     "results": [
-        # Fields the reference does not document, and an empty description, are dropped.
+        # Undocumented and empty fields reach the model unchanged, as in the other tools.
         {**IMAGE_ITEM, "summary": "old design corpus field", "html_snippet": "<div/>"},
         {**IMAGE_ITEM, "url": "https://cdn.example.com/2.jpg", "description": ""},
-    ]
-}
-IMAGE_TRIMMED: Dict[str, Any] = {
-    "results": [
-        IMAGE_ITEM,
-        {k: v for k, v in IMAGE_ITEM.items() if k != "description"}
-        | {"url": "https://cdn.example.com/2.jpg"},
     ]
 }
 
@@ -108,11 +101,6 @@ DESIGN_DATA: Dict[str, Any] = {
         }
     ],
     "specs": {"undocumented": True},
-}
-DESIGN_TRIMMED: Dict[str, Any] = {
-    "query": "pricing section",
-    "images": [DESIGN_IMAGE, APP_SCREEN],
-    "results": [WEB_RESULT],
 }
 
 
@@ -697,16 +685,19 @@ def test_design_valid_developer_options_accepted(options: Dict[str, Any]) -> Non
 # --- Results ----------------------------------------------------------------------------
 
 
-def test_image_results_trimmed_to_documented_fields(sync_client: MagicMock) -> None:
+def test_image_data_returned_unchanged(sync_client: MagicMock) -> None:
     result = _image().invoke({"query": "q"})
 
-    assert result == {"data": IMAGE_TRIMMED, "request_id": "rid"}
+    assert result == {"data": IMAGE_DATA, "request_id": "rid"}
+    assert result["data"]["results"][0]["summary"] == "old design corpus field"
 
 
-def test_design_results_trimmed_to_documented_fields(sync_client: MagicMock) -> None:
+def test_design_data_returned_unchanged(sync_client: MagicMock) -> None:
     result = _design().invoke({"query": "pricing section"})
 
-    assert result == {"data": DESIGN_TRIMMED, "request_id": "rid"}
+    assert result == {"data": DESIGN_DATA, "request_id": "rid"}
+    assert result["data"]["specs"] == {"undocumented": True}
+    assert result["data"]["results"][0]["favicon"].endswith("favicon.ico")
     assert result["data"]["images"][0]["group"]["group_id"] == GROUP_ID
 
 
@@ -750,32 +741,22 @@ def test_warning_kept_only_when_present(
 
 
 @pytest.mark.parametrize(
-    "data",
-    [{"results": "nope"}, {"results": ["nope"]}],
-    ids=["results-not-list", "item-not-dict"],
+    ("make_response", "method", "data"),
+    [
+        (_image_response, _img_search, {"results": "nope"}),
+        (_image_response, _img_search, {"results": ["nope"]}),
+        (_design_response, _des_search, {"images": {"a": 1}, "results": [1]}),
+    ],
+    ids=["image-results-not-list", "image-item-not-dict", "design-odd-shapes"],
 )
-def test_image_malformed_result_goes_to_model(data: Dict[str, Any], sync_client: MagicMock) -> None:
-    _img_search(sync_client).return_value = _image_response(data=data)
-
-    result = _image().invoke({"query": "q"})
-
-    assert isinstance(result, str) and "malformed" in result and MAY_HAVE_BEEN_SENT in result
-    assert "rid" in result
-
-
-@pytest.mark.parametrize(
-    "data",
-    [{"images": {"a": 1}}, {"results": [1]}, {"images": [{**DESIGN_IMAGE, "group": "g"}]}],
-    ids=["images-not-list", "result-not-dict", "group-not-dict"],
-)
-def test_design_malformed_result_goes_to_model(
-    data: Dict[str, Any], sync_client: MagicMock
+def test_unexpected_shapes_pass_through(
+    make_response: Any, method: Any, data: Dict[str, Any], sync_client: MagicMock
 ) -> None:
-    _des_search(sync_client).return_value = _design_response(data=data)
+    # Like the other tools, the tools do not reshape or police the response data.
+    method(sync_client).return_value = make_response(data=data)
+    tool: Tool = _image() if method is _img_search else _design()
 
-    result = _design().invoke({"query": "q"})
-
-    assert isinstance(result, str) and "malformed" in result and MAY_HAVE_BEEN_SENT in result
+    assert tool.invoke({"query": "q"}) == {"data": data, "request_id": "rid"}
 
 
 @pytest.mark.asyncio

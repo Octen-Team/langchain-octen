@@ -13,9 +13,6 @@
     model; call `octen` directly for those.
   - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor
     options, checked when the tool is built.
-  - `data.results` keeps each image's documented fields (`title`, `url`, `source_page`,
-    `description`, `width`, `height`, `thumbnail`); empty and undocumented fields are
-    dropped.
 - `OctenDesignSearch` (`octen_design_search`): Design Search, design references (web pages,
   page sections, app screens and slides) with their design values, plus web results on the
   same query.
@@ -28,12 +25,11 @@
     (it is the model's), `highlight` and `full_content` accept only the `enable` and
     `max_tokens` keys, `language` must be one of the documented ISO 639-1 codes and
     `start_time` / `end_time` must be RFC 3339 times. Left unset, the server defaults apply,
-    including `design_facts` and snippets of up to 5000 tokens per image.
-  - `data` keeps `query`, `images` and `results` with their documented fields; empty and
-    undocumented fields, and each web result's `favicon` and in-body `images`, are dropped.
-- Both tools return `{"data", "request_id", "warning"}` and split errors like the other
-  vertical tools. A 2xx response whose results are not the documented shape goes to the
-  model as a possibly billed failure.
+    so each image carries `design_facts` and a snippet of up to 5000 tokens (large output);
+    `images={"design_facts": False, "snippet": {"enable": False}}` turns them off and
+    `images={"snippet": {"max_tokens": ...}}` shortens the snippets.
+- Both tools return `{"data", "request_id", "warning"}` with the response's data unchanged,
+  and split errors like the other vertical tools.
 
 The existing tools are unchanged: same parameters, same requests, same return shape. The
 new tools are separate classes; nothing is added to an agent unless you pass them in.

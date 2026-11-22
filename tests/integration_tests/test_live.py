@@ -592,13 +592,14 @@ def test_design_search_developer_image_options(design_control: Dict[str, Any]) -
     print(f"types={[i.get('type') for i in images]} keys={sorted(result['data'])}")
     assert len(images) == 2, result
     assert all(i.get("url") and i.get("type") for i in images), images
-    assert not any("design_facts" in i or "snippet" in i for i in images), images
-    assert "results" not in result["data"], result
+    # data is unchanged, so a turned-off part may be absent or empty.
+    assert not any(i.get("design_facts") or i.get("snippet") for i in images), images
+    assert not result["data"].get("results"), result
     # The control, with server defaults, differs on each of those.
     control = design_control["data"]
     assert len(control["images"]) > 2, control
-    assert any("design_facts" in i for i in control["images"]), control
-    assert any("snippet" in i for i in control["images"]), control
+    assert any(i.get("design_facts") for i in control["images"]), control
+    assert any(i.get("snippet") for i in control["images"]), control
     assert control.get("results"), control
 
 
@@ -617,7 +618,7 @@ def test_design_search_developer_web_options(design_control: Dict[str, Any]) -> 
     _check("design web options", result)
     web = result["data"]["results"]
     print(f"web hosts={[urlparse(r['url']).hostname for r in web]}")
-    assert "images" not in result["data"], result
+    assert not result["data"].get("images"), result
     assert 0 < len(web) <= 2, result
     assert all(_on(urlparse(r["url"]).hostname or "", kept) for r in web), web
     assert not any(r.get("highlight") for r in web), web

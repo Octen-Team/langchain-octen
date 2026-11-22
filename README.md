@@ -357,10 +357,10 @@ same dict and splits errors the same way as the vertical search tools above.
   refused without a request and the model is told which to pass. The model can only pass an
   image by URL: base64 data and `data:` URIs are refused. To search with image bytes, call
   `octen.Octen().image_search.search(inputs=[{"type": "image", "data": ...}])` directly.
-- **Trimmed results.** `data.results` keeps each image's `title`, `url`, `source_page`,
-  `description`, `width`, `height` and `thumbnail`; empty fields and fields the API reference
-  does not document are dropped. The response's `meta` (usage, latency) is not part of the
-  tool result; a non-empty `meta.warning` is returned as `warning`.
+- **Results.** `data` is the response's data unchanged: `data.results` holds each image's
+  `title`, `url`, `source_page`, `description`, `width`, `height` and `thumbnail`. The
+  response's `meta` (usage, latency) is not part of the tool result; a non-empty
+  `meta.warning` is returned as `warning`.
 
 ```python
 from langchain_octen import OctenImageSearch
@@ -380,7 +380,7 @@ image result is a screenshot of a web page, a page section, an app screen or a s
 with its `url`, `thumbnail`, `title`, `description` and `source_page` (not for app screens),
 plus `design_facts` (colors, fonts, font sizes and the like) and reusable HTML in `snippet`
 when they are returned. Web results on the same query come back alongside in
-`data.results`.
+`data.results`. `data` is the response's data unchanged.
 
 | Model arguments | Constructor options |
 |---|---|
@@ -392,13 +392,20 @@ when they are returned. Web results on the same query come back alongside in
   then be omitted. A call with neither is refused without a request. `group_id` is the
   model's: `images={"group_id": ...}` raises `ValueError` at construction. How many of the
   group's images come back is your `images.count`.
-- **Size is yours.** Left unset, the server defaults apply: 5 images, each with
+- **Large output by default.** Left unset, the server defaults apply: 5 images, each with
   `design_facts` and a `snippet` of up to 5000 tokens where the image has reusable code, plus
-  5 web results with highlights. Turn off what your agent does not need, e.g.
-  `images={"snippet": {"enable": False}}` or `web_search={"enable": False}`.
-- **Trimmed results.** `data` keeps `query`, `images` and `results` with their documented
-  fields; empty fields, other fields the server adds, and each web result's `favicon` and
-  in-body `images` are dropped. A part you turned off is absent from `data`.
+  5 web results with highlights. That can be a lot of text for a model. Turn off or shorten
+  what your agent does not need:
+
+  | To | Pass |
+  |---|---|
+  | drop the design values | `images={"design_facts": False}` |
+  | drop the HTML snippets | `images={"snippet": {"enable": False}}` |
+  | shorten the snippets | `images={"snippet": {"max_tokens": 1000}}` (100-100000) |
+  | return fewer images | `images={"count": 3}` |
+  | drop the web results | `web_search={"enable": False}` |
+
+  A part you turned off is absent from `data`.
 
 ```python
 from langchain_octen import OctenDesignSearch

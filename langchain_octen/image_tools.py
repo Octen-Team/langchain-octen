@@ -2,7 +2,7 @@
 
 The model chooses what to search for (and the source-page domain filters of Image
 Search); result counts and every option that changes the size of a response are set by
-the developer. Results are trimmed to the documented fields the model can cite and show.
+the developer. ``data`` is the response's data, unchanged.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
-from langchain_core.tools import ToolException
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,7 +26,6 @@ from pydantic import (
 )
 from typing_extensions import Annotated, Literal, get_args
 
-from langchain_octen._client import MAY_HAVE_BEEN_SENT
 from langchain_octen.vertical_tools import (
     _PLACEHOLDER_QUERY,
     Language,
@@ -38,54 +36,6 @@ from langchain_octen.vertical_tools import (
 # Limits from https://docs.octen.ai/api-reference/image-search.md
 _IMAGE_MAX_COUNT = 10
 _IMAGE_MAX_DOMAINS = 10
-
-# Documented result fields; anything else the server returns is dropped.
-_IMAGE_FIELDS = ("title", "url", "source_page", "description", "width", "height", "thumbnail")
-_DESIGN_IMAGE_FIELDS = (
-    "type", "title", "description", "url", "thumbnail", "source_page", "width", "height",
-    "group", "design_facts", "snippet",
-)  # fmt: skip
-_GROUP_FIELDS = ("group_id", "type", "name", "position", "total", "master")
-# favicon and in-body images are left out: they are page chrome, not citation material.
-_DESIGN_WEB_FIELDS = (
-    "title", "url", "highlight", "full_content", "authors", "time_published",
-    "time_last_crawled", "cover_image",
-)  # fmt: skip
-
-
-class _MalformedResult(Exception):
-    pass
-
-
-def _pick(item: Any, fields: Tuple[str, ...]) -> Dict[str, Any]:
-    if not isinstance(item, dict):
-        raise _MalformedResult(f"expected an object, got {type(item).__name__}")
-    return {k: item[k] for k in fields if item.get(k) not in (None, "")}
-
-
-def _pick_all(items: Any, fields: Tuple[str, ...]) -> List[Dict[str, Any]]:
-    if not isinstance(items, list):
-        raise _MalformedResult(f"expected a list, got {type(items).__name__}")
-    return [_pick(item, fields) for item in items]
-
-
-class _OctenTrimmedTool(_OctenVerticalTool):
-    """Vertical tool whose ``data`` is trimmed to the documented result fields."""
-
-    def _trim(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError
-
-    def _result(self, response: Any) -> Dict[str, Any]:  # type: ignore[override]
-        result = super()._result(response)
-        try:
-            result["data"] = self._trim(result["data"])
-        except _MalformedResult as exc:
-            raise ToolException(
-                f"Octen returned a malformed {self.name} response ({exc}; request_id "
-                f"{result['request_id']}). {MAY_HAVE_BEEN_SENT}"
-            ) from None
-        return result
-
 
 # --- Image Search ------------------------------------------------------------------------
 
@@ -167,12 +117,12 @@ class OctenImageSearchInput(BaseModel):
         return self
 
 
-class OctenImageSearch(_OctenTrimmedTool):
+class OctenImageSearch(_OctenVerticalTool):
     """Octen Image Search: images on the web, found by text or by a reference image.
 
-    Returns ``{"data": {"results": [...]}, "request_id": ..., "warning"?: ...}``; each
-    result keeps the documented fields ``title``, ``url``, ``source_page``,
-    ``description``, ``width``, ``height`` and ``thumbnail`` (empty ones are omitted).
+    Returns ``{"data": ..., "request_id": ..., "warning"?: ...}`` where ``data`` is the
+    response's data unchanged: ``results`` with ``title``, ``url``, ``source_page``,
+    ``description``, ``width``, ``height`` and ``thumbnail`` per image.
 
     Instantiate:
         .. code-block:: python
@@ -198,9 +148,6 @@ class OctenImageSearch(_OctenTrimmedTool):
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         inputs = [{"type": "text", "data": _PLACEHOLDER_QUERY}]
         self._request_model(inputs=inputs, **{k: v for k, v in options.items() if v is not None})
-
-    def _trim(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {"results": _pick_all(data.get("results", []), _IMAGE_FIELDS)}
 
     def _run(  # type: ignore[override]
         self,
@@ -285,13 +232,16 @@ class OctenDesignSearchInput(BaseModel):
         return self
 
 
-class OctenDesignSearch(_OctenTrimmedTool):
+class OctenDesignSearch(_OctenVerticalTool):
     """Octen Design Search: design references as screenshots with their design values.
 
-    Returns ``{"data": {"query"?, "images"?, "results"?}, "request_id": ...,
-    "warning"?: ...}``: ``images`` are the design references (web pages, page sections,
-    app screens, slides; with ``group``, ``design_facts`` and ``snippet`` when returned),
-    ``results`` the web results on the same query. Each item keeps its documented fields.
+    Returns ``{"data": ..., "request_id": ..., "warning"?: ...}`` where ``data`` is the
+    response's data unchanged: ``images`` are the design references (web pages, page
+    sections, app screens, slides, with ``group``, ``design_facts`` and ``snippet``) and
+    ``results`` the web results on the same query. By default each image carries
+    ``design_facts`` and a snippet of up to 5000 tokens; ``images={"design_facts": False,
+    "snippet": {"enable": False}}`` turns them off, ``{"snippet": {"max_tokens": ...}}``
+    shortens the snippet.
 
     Instantiate:
         .. code-block:: python
@@ -369,20 +319,6 @@ class OctenDesignSearch(_OctenTrimmedTool):
         if self.timeout is not None:
             kwargs["timeout"] = self.timeout
         return kwargs
-
-    def _trim(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        trimmed: Dict[str, Any] = {}
-        if data.get("query"):
-            trimmed["query"] = data["query"]
-        if "images" in data:
-            images = _pick_all(data["images"], _DESIGN_IMAGE_FIELDS)
-            for image in images:
-                if "group" in image:
-                    image["group"] = _pick(image["group"], _GROUP_FIELDS)
-            trimmed["images"] = images
-        if "results" in data:
-            trimmed["results"] = _pick_all(data["results"], _DESIGN_WEB_FIELDS)
-        return trimmed
 
     def _run(  # type: ignore[override]
         self,
