@@ -52,7 +52,10 @@ _IMAGE_INPUT_HINTS = {
     "ICNS or SGI image, or try another image URL.",
     429: "The rate limit was exceeded: wait before trying again.",
 }
-_IMAGE_URL_HINT = "Try another image URL."
+# Other rejections of the image itself (400, and 422 "input unreadable or invalid").
+_IMAGE_REJECTED = frozenset({400, 422})
+_IMAGE_URL_HINT = "The image URL was rejected: try another image URL."
+_UNAVAILABLE = "The image search service is temporarily unavailable."
 
 # --- Image Search ------------------------------------------------------------------------
 
@@ -82,6 +85,7 @@ _Domains = Optional[List[str]]
 _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 # ASCII that cannot appear in a host; non-ASCII is left to the server, since a false
 # rejection of a valid internationalized host is worse than a server-side 4xx.
+_HOST_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
 _NOT_IN_HOST = frozenset("\\<>\"'`@[]")
 
 
@@ -109,6 +113,9 @@ def _valid_authority(netloc: str) -> bool:
         return False
     host = hostport.split(":", 1)[0]
     if not host or any(ch in _NOT_IN_HOST for ch in hostport):
+        return False
+    # A host escape must encode a non-ASCII byte or be %25, as the server's parser requires.
+    if any(h.upper() != "25" and int(h, 16) < 0x80 for h in _HOST_ESCAPE.findall(host)):
         return False
     return not _is_ip(host)
 
@@ -291,11 +298,13 @@ class OctenImageSearch(_OctenVerticalTool):
         if MAY_HAVE_BEEN_SENT in message:
             # Possibly billed: no suggestion to try again, only the warning.
             return f"Image search by image URL failed ({', '.join(details)}). {MAY_HAVE_BEEN_SENT}"
-        hint = _IMAGE_INPUT_HINTS.get(status) if isinstance(status, int) else None
-        fixed = (
-            f"Image search by image URL failed ({', '.join(details)}). {hint or _IMAGE_URL_HINT}"
-        )
-        return fixed
+        if status in _IMAGE_INPUT_HINTS:
+            hint = _IMAGE_INPUT_HINTS[status]
+        elif status in _IMAGE_REJECTED:
+            hint = _IMAGE_URL_HINT
+        else:  # 5xx, 408, and timeouts or connection errors before sending
+            hint = _UNAVAILABLE
+        return f"Image search by image URL failed ({', '.join(details)}). {hint}"
 
     def _failure(self, exc: Exception) -> Tuple[Optional[Exception], bool]:
         if not _CURRENT_IMAGE_URL.get():
@@ -404,8 +413,11 @@ class OctenDesignSearchInput(BaseModel):
     group_id: Optional[StrictStr] = Field(
         default=None,
         min_length=1,
-        description="The group.group_id of an earlier image result, to get the first "
-        "images of that web page or deck in group order instead of searching.",
+        # The server refuses 128 or more characters (code points).
+        max_length=127,
+        description="The group.group_id of an earlier image result (at most 127 "
+        "characters), to get the first images of that web page or deck in group order "
+        "instead of searching.",
     )
 
     _check_query = field_validator("query", mode="after")(_not_blank)

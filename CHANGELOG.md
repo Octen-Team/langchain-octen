@@ -26,7 +26,7 @@
   page sections, app screens and slides) with their design values, plus web results on the
   same query.
   - The model passes `query` (max 500 characters), `group_id` or both. `group_id` is the
-    `group.group_id` of an earlier image result and returns the first images of that page
+    `group.group_id` of an earlier image result (at most 127 characters) and returns the first images of that page
     or deck in group order instead of a search, at most `images.count` (5 by default); the
     tool description states the limit. A call with neither is refused without a request.
     With `images={"enable": False}` the input schema has only a required `query`, the

@@ -343,6 +343,10 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://example.com/photo.png?q=1#50%"}, "image_url"),
         ({"image_url": "https://example.com/photo%;ab"}, "image_url"),
         ({"image_url": "https://ex%zzample.com/a.png"}, "image_url"),
+        # A host escape must encode a non-ASCII byte or be %25.
+        ({"image_url": "https://%65xample.com/photo.jpg"}, "image_url"),
+        ({"image_url": "https://example%2ecom/photo.png"}, "image_url"),
+        ({"image_url": "https://ex%2Dample.com/a.png"}, "image_url"),
         # A "?" inside the fragment does not start a query.
         ({"image_url": "https://example.com/photo.png#a?b=50%"}, "image_url"),
         ({"image_url": "https://[2001:zz::1]/a.png"}, "image_url"),
@@ -392,6 +396,9 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-query-then-bad-fragment",
         "url-bad-escape-before-params",
         "url-bad-escape-in-host-2",
+        "url-host-escape-ascii-letter",
+        "url-host-escape-dot",
+        "url-host-escape-dash",
         "url-question-mark-in-fragment",
         "url-bad-ipv6",
         "url-ipv6-trailing-junk",
@@ -482,6 +489,9 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "https://example.com/photo.png?label=50%",
         "https://example.com/photo.png?q=%zz#ok",
         "https://example.com/photo.png#50%25",
+        "https://caf%C3%A9.com/a.png",
+        "https://ex%25ample.com/a.png",
+        "https://us%65r:p%2e@example.com/a.png",
     ],
     ids=[
         "upper",
@@ -497,6 +507,9 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "bare-percent-in-query",
         "bad-escape-in-query-then-fragment",
         "escape-in-fragment",
+        "host-escape-non-ascii",
+        "host-escape-percent",
+        "userinfo-ascii-escapes",
     ],
 )
 def test_image_https_urls_accepted(url: str, sync_client: MagicMock) -> None:
@@ -847,6 +860,65 @@ def test_image_model_message_hides_url_query(exc: Exception, sync_client: MagicM
         assert f"request_id {request_id}" in result, result
 
 
+@pytest.mark.parametrize("group_id", ["g" * 127, "\U0001f600" * 127], ids=["ascii", "astral"])
+def test_design_group_id_of_127_code_points_is_sent(group_id: str, sync_client: MagicMock) -> None:
+    _design().invoke({"group_id": group_id})
+
+    _des_search(sync_client).assert_called_once_with(images={"group_id": group_id})
+
+
+UNAVAILABLE = "temporarily unavailable"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OctenAPIError("upstream unavailable", status_code=503),
+     OctenAPIError("internal", status_code=500),
+     OctenAPIError("request timeout", status_code=408),
+     OctenConnectionError("refused", request_sent=False),
+     OctenTimeoutError(timeout=5.0, request_sent=False)],
+    ids=["503", "500", "408", "connection-unsent", "timeout-unsent"],
+)  # fmt: skip
+def test_image_url_transient_failure_is_neutral(exc: Exception, sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke({"image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and UNAVAILABLE in result, result
+    assert "another image" not in result and MAY_HAVE_BEEN_SENT not in result, result
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OctenAPIError("bad gateway", status_code=502),
+     OctenAPIError("gateway timeout", status_code=504),
+     OctenTimeoutError(timeout=5.0, request_sent=True),
+     OctenConnectionError("reset", request_sent=None)],
+    ids=["502", "504", "timeout-sent", "connection-unknown"],
+)  # fmt: skip
+def test_image_url_possibly_billed_failure_has_no_image_advice(
+    exc: Exception, sync_client: MagicMock
+) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke({"image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and MAY_HAVE_BEEN_SENT in result, result
+    assert "another image" not in result, result
+
+
+@pytest.mark.parametrize("status", [400, 413, 415, 422])
+def test_image_url_input_rejection_suggests_another_image(
+    status: int, sync_client: MagicMock
+) -> None:
+    _img_search(sync_client).side_effect = OctenAPIError("rejected", status_code=status)
+
+    result = _image().invoke({"image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and "another image URL" in result, result
+    assert UNAVAILABLE not in result, result
+
+
 def test_image_url_timeout_keeps_billing_warning(sync_client: MagicMock) -> None:
     _img_search(sync_client).side_effect = OctenTimeoutError(timeout=30.0, request_sent=True)
 
@@ -1083,10 +1155,20 @@ async def test_design_query_or_group_required_async(async_client: MagicMock) -> 
         ({"query": ""}, "query"),
         ({"query": "x" * 501}, "query"),
         ({"group_id": ""}, "group_id"),
+        ({"group_id": "g" * 128}, "group_id"),
+        ({"group_id": "\U0001f600" * 128}, "group_id"),
         ({"group_id": 123}, "group_id"),
         ({"qeury": "q"}, "qeury"),
     ],
-    ids=["query-empty", "query-501", "group-empty", "group-int", "misspelt-query"],
+    ids=[
+        "query-empty",
+        "query-501",
+        "group-empty",
+        "group-128",
+        "group-128-astral",
+        "group-int",
+        "misspelt-query",
+    ],
 )
 def test_design_invalid_model_input_goes_to_model(
     args: Dict[str, Any], named: str, sync_client: MagicMock
