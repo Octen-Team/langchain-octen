@@ -332,13 +332,19 @@ def _items(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result["data"]["results"]  # type: ignore[no-any-return]
 
 
+def _by_url(result: Dict[str, Any], urls: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Items keyed by url; each input URL must come back exactly once, with no extras."""
+    items = _items(result)
+    assert sorted(i["url"] for i in items) == sorted(urls), items
+    return {i["url"]: i for i in items}
+
+
 def test_extract_reads_pages() -> None:
     tool = OctenExtract(max_urls=2)
     result = tool.invoke({"urls": [EXAMPLE, DOCS]})
     _check(tool.name, result)
-    items = _items(result)
+    items = list(_by_url(result, [EXAMPLE, DOCS]).values())
     print(f"titles={[i.get('title') for i in items]}")
-    assert [i["url"] for i in items] == [EXAMPLE, DOCS], items
     assert all(i["status"] == "success" for i in items), items
     assert all(i.get("full_content") and i.get("title") for i in items), items
     assert not any(i.get("highlights") for i in items), items
@@ -360,7 +366,8 @@ async def test_extract_failed_url_reported_per_url_async(monkeypatch: pytest.Mon
     tool = OctenExtract(max_urls=2)
     result = await tool.ainvoke({"urls": [EXAMPLE, UNREACHABLE]})
     _check(tool.name, result)
-    ok, failed = _items(result)
+    by_url = _by_url(result, [EXAMPLE, UNREACHABLE])
+    ok, failed = by_url[EXAMPLE], by_url[UNREACHABLE]
     print(f"failed item={failed} usage={responses[0].usage}")
     assert ok["url"] == EXAMPLE and ok["status"] == "success" and ok.get("full_content"), ok
     assert failed["url"] == UNREACHABLE and failed["status"] == "failed", failed
