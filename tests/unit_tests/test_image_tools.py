@@ -339,6 +339,12 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://exa%zzmple.com/a.png"}, "image_url"),
         ({"image_url": "https://example.com/a%zz.png"}, "image_url"),
         ({"image_url": "https://example.com/a%4.png"}, "image_url"),
+        ({"image_url": "https://example.com/photo.png#50%"}, "image_url"),
+        ({"image_url": "https://example.com/photo.png?q=1#50%"}, "image_url"),
+        ({"image_url": "https://example.com/photo%;ab"}, "image_url"),
+        ({"image_url": "https://ex%zzample.com/a.png"}, "image_url"),
+        # A "?" inside the fragment does not start a query.
+        ({"image_url": "https://example.com/photo.png#a?b=50%"}, "image_url"),
         ({"image_url": "https://[2001:zz::1]/a.png"}, "image_url"),
         ({"image_url": "https://[2001:4860::1]junk:443/a.png"}, "image_url"),
         ({"image_url": "https://[2001:4860::1]:44x/a.png"}, "image_url"),
@@ -382,6 +388,11 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-bad-escape-in-host",
         "url-bad-escape-in-path",
         "url-short-escape",
+        "url-bad-escape-in-fragment",
+        "url-query-then-bad-fragment",
+        "url-bad-escape-before-params",
+        "url-bad-escape-in-host-2",
+        "url-question-mark-in-fragment",
         "url-bad-ipv6",
         "url-ipv6-trailing-junk",
         "url-ipv6-bad-port",
@@ -467,9 +478,10 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "https://user:pass@example.com/a.png",
         # A non-ASCII space (U+00A0) in the path is left to the URL parser and sent as is.
         "https://example.com/caf\u00e9\u00a0menu.png",
-        # The server keeps the query and fragment raw, so a bare % there is fine.
+        # The server keeps only the query raw, so a bare % is fine there.
         "https://example.com/photo.png?label=50%",
-        "https://example.com/photo.png#50%zz",
+        "https://example.com/photo.png?q=%zz#ok",
+        "https://example.com/photo.png#50%25",
     ],
     ids=[
         "upper",
@@ -483,7 +495,8 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "userinfo",
         "nbsp-in-path",
         "bare-percent-in-query",
-        "bad-escape-in-fragment",
+        "bad-escape-in-query-then-fragment",
+        "escape-in-fragment",
     ],
 )
 def test_image_https_urls_accepted(url: str, sync_client: MagicMock) -> None:

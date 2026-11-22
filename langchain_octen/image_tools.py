@@ -85,6 +85,15 @@ _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _NOT_IN_HOST = frozenset("\\<>\"'`@[]")
 
 
+def _bad_escape_outside_query(raw: str) -> bool:
+    """A malformed % escape anywhere but the query, which the server keeps raw."""
+    fragment = raw.find("#")
+    query = raw.find("?")
+    if query != -1 and (fragment == -1 or query < fragment):
+        raw = raw[:query] + (raw[fragment:] if fragment != -1 else "")
+    return bool(_BAD_ESCAPE.search(raw))
+
+
 def _is_ip(host: str) -> bool:
     try:
         ipaddress.ip_address(host)
@@ -209,8 +218,7 @@ class OctenImageSearchInput(BaseModel):
             raise ValueError("must be a URL without spaces")
         try:
             parsed = urlsplit(value)
-            # The server keeps the query and fragment raw; host and path escapes must parse.
-            escapes_ok = not any(_BAD_ESCAPE.search(p) for p in (parsed.netloc, parsed.path))
+            escapes_ok = not _bad_escape_outside_query(value)
             ok = parsed.scheme.lower() == "https" and _valid_authority(parsed.netloc) and escapes_ok
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
         except ValueError:  # e.g. an unclosed bracket or a bad port
