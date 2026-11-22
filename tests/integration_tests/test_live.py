@@ -1,9 +1,10 @@
 """Live tests against the Octen API.
 
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
-tool is invoked with a small result count: once, or for the Web Search Premier and
-Extract tests two or three calls (calls with the option and same-input controls). Extract bills
-each successfully read URL; the Extract tests read 15 at most.
+tool is invoked with a small result count: once, or for the Web Search Premier, Extract,
+Image Search and Design Search tests two or three calls (calls with the option and
+same-input controls). Extract bills each successfully read URL; the Extract tests read 15
+at most. The Image Search and Design Search tests make 9 calls.
 """
 
 from __future__ import annotations
@@ -18,13 +19,16 @@ import octen
 import pytest
 from octen import OctenAuthenticationError
 from octen.async_client import AsyncExtractResource
+from octen.core.http_client import HTTPClient
 from octen.resources.search import SearchResource
 from pydantic import SecretStr
 
 from langchain_octen import (
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenDesignSearch,
     OctenExtract,
+    OctenImageSearch,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
@@ -78,6 +82,8 @@ _NO_REQUEST = {
     "test_search_premier_bad_option_raises_at_construction",
     "test_extract_cap_rejects_without_request",
     "test_extract_model_cannot_set_mode",
+    "test_image_search_violations_send_nothing",
+    "test_design_search_violations_send_nothing",
 }
 
 
@@ -478,3 +484,167 @@ def test_extract_cap_rejects_without_request() -> None:
 def test_extract_model_cannot_set_mode() -> None:
     result = OctenExtract().invoke({"urls": [EXAMPLE], "mode": "advanced"})
     assert isinstance(result, str) and "mode" in result, result
+
+
+IMAGE_QUERY = "golden gate bridge"
+# A stable public photo (Wikimedia Commons, 3.1 MB JPEG), under the API's 5 MB limit.
+REFERENCE_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/0/0c/GoldenGateBridge-001.jpg"
+
+
+def _source_hosts(result: Dict[str, Any]) -> List[str]:
+    return [urlparse(r["source_page"]).hostname or "" for r in result["data"]["results"]]
+
+
+def _registered(host: str) -> str:
+    return ".".join(host.split(".")[-2:])
+
+
+@pytest.fixture
+def request_bodies(monkeypatch: pytest.MonkeyPatch) -> List[Any]:
+    """Record the JSON body of each request octen sends."""
+    bodies: List[Any] = []
+    original = HTTPClient.request
+
+    def spy(self: HTTPClient, *args: Any, **kwargs: Any) -> Any:
+        bodies.append(kwargs.get("json"))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(HTTPClient, "request", spy)
+    return bodies
+
+
+def test_image_search_by_text_with_filters(request_bodies: List[Any]) -> None:
+    # The filtered call first, so a dropped filter or count fails before the control is billed.
+    included = OctenImageSearch(count=2).invoke(
+        {"query": IMAGE_QUERY, "include_domains": ["wikipedia.org"]}
+    )
+    _check("include_domains + count=2", included)
+    print(f"included hosts={_source_hosts(included)}")
+    assert len(included["data"]["results"]) == 2, included
+    assert all(_on(h, "wikipedia.org") for h in _source_hosts(included)), included
+
+    control = OctenImageSearch().invoke({"query": IMAGE_QUERY})
+    _check("image control", control)
+    hosts = _source_hosts(control)
+    print(f"control hosts={hosts}")
+    # Server default count is 5; the control must show off-filter hosts to discriminate.
+    assert len(hosts) > 2, control
+    assert any(not _on(h, "wikipedia.org") for h in hosts), control
+    assert all(r.get("url") and r.get("source_page") for r in control["data"]["results"])
+
+    dropped = _registered(hosts[0])
+    tool = OctenImageSearch(safesearch="off")
+    excluded = tool.invoke({"query": IMAGE_QUERY, "exclude_domains": [dropped]})
+    _check(f"exclude_domains {dropped}", excluded)
+    print(f"excluded hosts={_source_hosts(excluded)}")
+    assert excluded["data"]["results"], excluded
+    assert not any(_on(h, dropped) for h in _source_hosts(excluded)), excluded
+    # safesearch is not echoed in the response; the server accepted the request carrying it.
+    assert request_bodies[-1]["safesearch"] == "off", request_bodies[-1]
+    assert "safesearch" not in request_bodies[1], request_bodies[1]
+
+
+def test_image_search_by_url(request_bodies: List[Any]) -> None:
+    result = OctenImageSearch(count=3).invoke({"image_url": REFERENCE_IMAGE})
+    _check("image_url", result)
+    print(f"image_url hosts={_source_hosts(result)}")
+    assert request_bodies[0]["inputs"] == [{"type": "image", "url": REFERENCE_IMAGE}]
+    assert 0 < len(result["data"]["results"]) <= 3, result
+    assert all(r.get("url") for r in result["data"]["results"]), result
+
+
+def test_image_search_violations_send_nothing() -> None:
+    tool = OctenImageSearch()
+    both = tool.invoke({"query": IMAGE_QUERY, "image_url": REFERENCE_IMAGE})
+    neither = tool.invoke({"include_domains": ["wikipedia.org"]})
+    count = tool.invoke({"query": IMAGE_QUERY, "count": 10})
+    assert isinstance(both, str) and "not both" in both, both
+    assert isinstance(neither, str) and "image_url" in neither, neither
+    assert isinstance(count, str) and "count" in count, count
+
+
+DESIGN_QUERY = "pricing section for a SaaS landing page"
+
+
+@pytest.fixture(scope="module")
+def design_control() -> Dict[str, Any]:
+    """One default-options call, shared as the control of the Design Search checks."""
+    # Module-scoped, so it builds its own single-attempt client.
+    client = octen.Octen(api_key=os.environ["OCTEN_API_KEY"], retry_after_send=False, max_retries=0)
+    tool = OctenDesignSearch()
+    try:
+        response = client.design_search.search(query=DESIGN_QUERY)
+    finally:
+        client.close()
+    result = tool._result(response)
+    _check("design control", result)
+    return result
+
+
+def test_design_search_developer_image_options(design_control: Dict[str, Any]) -> None:
+    tool = OctenDesignSearch(
+        images={"count": 2, "design_facts": False, "snippet": {"enable": False}},
+        web_search={"enable": False},
+    )
+    result = tool.invoke({"query": DESIGN_QUERY})
+    _check("design images options", result)
+    images = result["data"]["images"]
+    print(f"types={[i.get('type') for i in images]} keys={sorted(result['data'])}")
+    assert len(images) == 2, result
+    assert all(i.get("url") and i.get("type") for i in images), images
+    assert not any("design_facts" in i or "snippet" in i for i in images), images
+    assert "results" not in result["data"], result
+    # The control, with server defaults, differs on each of those.
+    control = design_control["data"]
+    assert len(control["images"]) > 2, control
+    assert any("design_facts" in i for i in control["images"]), control
+    assert any("snippet" in i for i in control["images"]), control
+    assert control.get("results"), control
+
+
+def test_design_search_developer_web_options(design_control: Dict[str, Any]) -> None:
+    control = design_control["data"]["results"]
+    hosts = [urlparse(r["url"]).hostname or "" for r in control]
+    print(f"control web hosts={hosts}")
+    assert len(control) > 2 and all(r.get("highlight") for r in control), control
+    kept = _registered(hosts[0])
+    assert any(not _on(h, kept) for h in hosts), hosts
+    tool = OctenDesignSearch(
+        images={"enable": False},
+        web_search={"count": 2, "include_domains": [kept], "highlight": {"enable": False}},
+    )
+    result = tool.invoke({"query": DESIGN_QUERY})
+    _check("design web options", result)
+    web = result["data"]["results"]
+    print(f"web hosts={[urlparse(r['url']).hostname for r in web]}")
+    assert "images" not in result["data"], result
+    assert 0 < len(web) <= 2, result
+    assert all(_on(urlparse(r["url"]).hostname or "", kept) for r in web), web
+    assert not any(r.get("highlight") for r in web), web
+
+
+def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
+    grouped = [i for i in design_control["data"]["images"] if i.get("group")]
+    assert grouped, design_control
+    group = grouped[0]["group"]
+    print(f"group={group}")
+    # The search mixed images from outside the group, so an all-in-group answer discriminates.
+    others = [i for i in design_control["data"]["images"] if i.get("group") != group]
+    assert others, design_control
+    result = OctenDesignSearch(images={"count": 3}).invoke({"group_id": group["group_id"]})
+    _check("design group_id", result)
+    images = result["data"]["images"]
+    positions = [i["group"]["position"] for i in images]
+    print(f"group positions={positions} total={images[0]['group'].get('total')}")
+    print(f"group call data keys={sorted(result['data'])}")
+    assert 0 < len(images) <= 3, result
+    assert all(i["group"]["group_id"] == group["group_id"] for i in images), images
+    assert positions == sorted(positions), positions
+
+
+def test_design_search_violations_send_nothing() -> None:
+    tool = OctenDesignSearch()
+    missing = tool.invoke({})
+    count = tool.invoke({"query": DESIGN_QUERY, "images": {"count": 100}})
+    assert isinstance(missing, str) and "group_id" in missing, missing
+    assert isinstance(count, str) and "images" in count, count
