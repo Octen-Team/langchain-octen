@@ -1,8 +1,9 @@
 """Live tests against the Octen API.
 
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
-tool is invoked with a small result count: once, or for the Web Search Premier tests
-two calls (a filtered call and a same-query control).
+tool is invoked with a small result count: once, or for the Web Search Premier and
+Extract tests two calls (a call with the option and a same-input control). Extract bills
+each successfully read URL; the Extract tests read 11 at most.
 """
 
 from __future__ import annotations
@@ -16,12 +17,14 @@ from urllib.parse import urlparse
 import octen
 import pytest
 from octen import OctenAuthenticationError
+from octen.async_client import AsyncExtractResource
 from octen.resources.search import SearchResource
 from pydantic import SecretStr
 
 from langchain_octen import (
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenExtract,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
@@ -73,6 +76,8 @@ _NO_REQUEST = {
     "test_out_of_range_developer_count_raises_at_construction",
     "test_search_premier_model_cannot_set_count",
     "test_search_premier_bad_option_raises_at_construction",
+    "test_extract_cap_rejects_without_request",
+    "test_extract_model_cannot_set_mode",
 }
 
 
@@ -305,3 +310,108 @@ def test_search_premier_model_cannot_set_count() -> None:
 def test_search_premier_bad_option_raises_at_construction() -> None:
     with pytest.raises(ValueError, match="result_type"):
         OctenSearchPremier(result_type="smart")
+
+
+# Stable public pages; .invalid is reserved (RFC 2606), so that host never resolves.
+EXAMPLE = "https://example.com/"
+DOCS = "https://docs.octen.ai/api-reference/extract"
+UNREACHABLE = "https://nonexistent.invalid/"
+
+
+def _items(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return result["data"]["results"]  # type: ignore[no-any-return]
+
+
+def test_extract_reads_pages() -> None:
+    tool = OctenExtract(max_urls=2)
+    result = tool.invoke({"urls": [EXAMPLE, DOCS]})
+    _check(tool.name, result)
+    items = _items(result)
+    print(f"titles={[i.get('title') for i in items]}")
+    assert [i["url"] for i in items] == [EXAMPLE, DOCS], items
+    assert all(i["status"] == "success" for i in items), items
+    assert all(i.get("full_content") and i.get("title") for i in items), items
+    assert not any(i.get("highlights") for i in items), items
+
+
+@pytest.mark.asyncio
+async def test_extract_failed_url_reported_per_url_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: List[Any] = []
+    original = AsyncExtractResource.extract
+
+    async def spy(self: AsyncExtractResource, *args: Any, **kwargs: Any) -> Any:
+        response = await original(self, *args, **kwargs)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(AsyncExtractResource, "extract", spy)
+    tool = OctenExtract(max_urls=2)
+    result = await tool.ainvoke({"urls": [EXAMPLE, UNREACHABLE]})
+    _check(tool.name, result)
+    ok, failed = _items(result)
+    print(f"failed item={failed} usage={responses[0].usage}")
+    assert ok["url"] == EXAMPLE and ok["status"] == "success" and ok.get("full_content"), ok
+    assert failed["url"] == UNREACHABLE and failed["status"] == "failed", failed
+    assert failed.get("error_message"), failed
+    assert not failed.get("full_content"), failed
+    # Only the page that was read is billed.
+    assert responses[0].successful_urls == 1, responses[0].meta
+
+
+def test_extract_query_returns_highlights() -> None:
+    # The same page with the model's query and without it.
+    tool = OctenExtract(max_urls=1)
+    focused = tool.invoke({"urls": [DOCS], "query": "how long cached content is kept"})
+    control = tool.invoke({"urls": [DOCS]})
+    _check(f"{tool.name} query", focused)
+    _check(f"{tool.name} control", control)
+    (item,), (plain,) = _items(focused), _items(control)
+    print(f"highlights={item.get('highlights')!r:.300}")
+    assert item["status"] == "success" and item.get("highlights"), item
+    assert not item.get("full_content"), item
+    assert plain.get("full_content") and not plain.get("highlights"), plain
+
+
+def test_extract_advanced_mode_reaches_server() -> None:
+    advanced = OctenExtract(max_urls=1, mode="advanced").invoke({"urls": [EXAMPLE]})
+    control = OctenExtract(max_urls=1).invoke({"urls": [EXAMPLE]})
+    _check("advanced", advanced)
+    _check("control", control)
+    (item,), (plain,) = _items(advanced), _items(control)
+    print(f"resolved_mode={item.get('resolved_mode')} control={plain.get('resolved_mode')}")
+    assert item["status"] == "success" and item["resolved_mode"] == "advanced", item
+    assert plain["resolved_mode"] == "standard", plain
+
+
+def test_extract_text_format_reaches_server() -> None:
+    text = OctenExtract(max_urls=1, format="text").invoke({"urls": [DOCS]})
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("text", text)
+    _check("markdown control", control)
+    (item,), (plain,) = _items(text), _items(control)
+    markdown_heading = re.compile(r"^#{1,6} ", re.MULTILINE)
+    print(f"text={item.get('full_content')!r:.200}\nmarkdown={plain.get('full_content')!r:.200}")
+    assert markdown_heading.search(plain["full_content"]), plain
+    assert item.get("full_content") and not markdown_heading.search(item["full_content"]), item
+
+
+def test_extract_links_reach_server() -> None:
+    linked = OctenExtract(max_urls=1, include_links={"max_links": 3}).invoke({"urls": [DOCS]})
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("links", linked)
+    _check("control", control)
+    (item,), (plain,) = _items(linked), _items(control)
+    print(f"links={item.get('links')}")
+    assert item.get("links") and len(item["links"]) <= 3, item
+    assert all(link.get("url") for link in item["links"]), item
+    assert not plain.get("links"), plain
+
+
+def test_extract_cap_rejects_without_request() -> None:
+    result = OctenExtract(max_urls=1).invoke({"urls": [EXAMPLE, DOCS]})
+    assert isinstance(result, str) and "at most 1" in result, result
+
+
+def test_extract_model_cannot_set_mode() -> None:
+    result = OctenExtract().invoke({"urls": [EXAMPLE], "mode": "advanced"})
+    assert isinstance(result, str) and "mode" in result, result
