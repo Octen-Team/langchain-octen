@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import ipaddress
 import re
+import string
 from contextvars import ContextVar
 from datetime import datetime
 from fractions import Fraction
@@ -83,10 +84,12 @@ _NO_INPUT = (
 )
 _Domains = Optional[List[str]]
 _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
-# ASCII that cannot appear in a host; non-ASCII is left to the server, since a false
-# rejection of a valid internationalized host is worse than a server-side 4xx.
+# RFC 3986 unreserved and sub-delims characters. A host may also hold non-ASCII (IDN)
+# characters and % escapes; userinfo is ASCII only and may also hold ":" and escapes.
+_URI_SAFE = frozenset(string.ascii_letters + string.digits + "-._~!$&'()*+,;=")
+_HOST_ASCII = _URI_SAFE | {"%"}
+_USERINFO_ASCII = _URI_SAFE | {":", "%"}
 _HOST_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
-_NOT_IN_HOST = frozenset("\\<>\"'`@[]")
 
 
 def _bad_escape_outside_query(raw: str) -> bool:
@@ -109,10 +112,10 @@ def _is_ip(host: str) -> bool:
 def _valid_authority(netloc: str) -> bool:
     """A domain-name host: the API refuses IP addresses (so any [IPv6] literal) as hosts."""
     userinfo, _, hostport = netloc.rpartition("@")
-    if any(ch in "@[]" for ch in userinfo):
+    if not all(ch in _USERINFO_ASCII for ch in userinfo):
         return False
     host = hostport.split(":", 1)[0]
-    if not host or any(ch in _NOT_IN_HOST for ch in hostport):
+    if not host or any(ord(ch) < 0x80 and ch not in _HOST_ASCII for ch in host):
         return False
     # A host escape must encode a non-ASCII byte or be %25, as the server's parser requires.
     if any(h.upper() != "25" and int(h, 16) < 0x80 for h in _HOST_ESCAPE.findall(host)):
@@ -421,6 +424,7 @@ class OctenDesignSearchInput(BaseModel):
     )
 
     _check_query = field_validator("query", mode="after")(_not_blank)
+    _check_group = field_validator("group_id", mode="after")(_not_blank)
 
     @model_validator(mode="after")
     def _query_or_group(self) -> "OctenDesignSearchInput":
@@ -520,6 +524,11 @@ class OctenDesignSearch(_OctenVerticalTool):
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         images, web = options["images"] or {}, options["web_search"] or {}
+        # octen would coerce "false" or 0; the schema and description switch on these, so
+        # only real booleans keep them in step with the request.
+        for name, part in (("images", images), ("web_search", web)):
+            if "enable" in part and not isinstance(part["enable"], bool):
+                raise ValueError(f"invalid {self.name} option: {name}.enable must be true or false")
         if "group_id" in images:
             raise ValueError(
                 f"invalid {self.name} option: images.group_id is chosen per call by the "
