@@ -358,6 +358,10 @@ class _OctenVerticalTool(BaseTool):
             result["warning"] = warning
         return result
 
+    def _model_error(self, exc: Exception) -> Optional[str]:
+        """Return the message for the model, or ``None`` if ``exc`` must be raised."""
+        return _route(exc)
+
     def _method(self, client: Any) -> Any:
         resource, method = self._sdk_method
         return getattr(getattr(client, resource), method)
@@ -385,7 +389,7 @@ class _OctenVerticalTool(BaseTool):
         try:
             response = self._method(client)(**kwargs)
         except Exception as exc:
-            message = _route(exc)
+            message = self._model_error(exc)
             if message is None:
                 raise
             raise ToolException(message) from exc
@@ -398,7 +402,7 @@ class _OctenVerticalTool(BaseTool):
         try:
             response = await self._method(client)(**kwargs)
         except Exception as exc:
-            message = _route(exc)
+            message = self._model_error(exc)
             if message is None:
                 raise
             raise ToolException(message) from exc

@@ -315,6 +315,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "data:image/png;base64,iVBORw0KGgo="}, "image_url"),
         ({"image_url": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}, "image_url"),
         ({"image_url": "https://"}, "image_url"),
+        ({"image_url": "https://:443/photo.png"}, "image_url"),
+        ({"image_url": "https://[example.com/x.jpg"}, "image_url"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
         ({"query": "q", "exclude_domains": [f"d{i}.com" for i in range(11)]}, "exclude_domains"),
         ({"query": "q", "include_domains": "a.com"}, "include_domains"),
@@ -328,6 +330,8 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-data-uri",
         "url-base64",
         "url-no-host",
+        "url-port-only",
+        "url-unparseable",
         "include-11",
         "exclude-11",
         "domains-not-list",
@@ -362,6 +366,16 @@ def test_image_model_cannot_set_developer_options(
     result = _image().invoke({"query": "q", **extra})
 
     assert isinstance(result, str) and next(iter(extra)) in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "url", ["https://:443/photo.png", "https://[example.com/x.jpg", "https://"], ids=repr
+)
+def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) -> None:
+    result = _image().invoke({"image_url": url})
+
+    assert isinstance(result, str) and "public http(s) URL of an image" in result, result
     sync_client.assert_not_called()
 
 
@@ -643,6 +657,10 @@ def test_design_model_cannot_set_developer_options(
         ({"web_search": {"time_range": "decade"}}, "time_range"),
         ({"web_search": {"start_time": "2025-01-01"}}, "start_time"),
         ({"web_search": {"end_time": "2025-13-01T00:00:00Z"}}, "end_time"),
+        ({"web_search": {"start_time": "2025-02-30T00:00:00Z"}}, "start_time"),
+        ({"web_search": {"start_time": "2025-01-01T24:00:00Z"}}, "start_time"),
+        ({"web_search": {"end_time": "2025-01-01T00:00:00+24:00"}}, "end_time"),
+        ({"web_search": {"end_time": "2025-01-01t00:00:00z"}}, "end_time"),
         ({"web_search": {"include_domains": ["a" * 61]}}, "include_domains"),
         ({"web_search": {"exclude_domains": ["a.com"] * 1201}}, "exclude_domains"),
         ({"web_search": {"safesearch": "off"}}, "safesearch"),
@@ -809,11 +827,63 @@ POSSIBLY_BILLED = [
 CONFIG = [
     OctenAuthenticationError(),
     OctenAPIError("insufficient balance", status_code=403),
-    OctenAPIError("Payload too large", status_code=413),
-    OctenAPIError("Unsupported media type", status_code=415),
     OctenValidationError("image search request failed validation"),
     RuntimeError("unexpected"),
 ]
+IMAGE_INPUT_ERRORS = [
+    (OctenAPIError("Payload too large", status_code=413), "smaller image"),
+    (OctenAPIError("Unsupported media type", status_code=415), "JPEG, PNG, WEBP"),
+]
+
+
+@pytest.mark.parametrize(("exc", "hint"), IMAGE_INPUT_ERRORS, ids=["413", "415"])
+def test_image_input_errors_go_to_model(exc: Exception, hint: str, sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke({"image_url": IMAGE_URL})
+
+    assert isinstance(result, str) and str(exc) in result and hint in result, result
+    assert "another image" in result
+    sync_client.return_value.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exc", "hint"), IMAGE_INPUT_ERRORS, ids=["413", "415"])
+async def test_image_input_errors_go_to_model_async(
+    exc: Exception, hint: str, async_client: MagicMock
+) -> None:
+    _img_search(async_client).side_effect = exc
+
+    result = await _image().ainvoke({"image_url": IMAGE_URL})
+
+    assert isinstance(result, str) and hint in result, result
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAuthenticationError(),
+        OctenAPIError("insufficient balance", status_code=403),
+        OctenAPIError("Payload too large", status_code=200, response_data={"code": 403}),
+    ],
+    ids=repr,
+)
+def test_image_auth_and_access_errors_still_raise(exc: Exception, sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    with pytest.raises(type(exc)):
+        _image().invoke({"image_url": IMAGE_URL})
+
+
+@pytest.mark.parametrize("status", [413, 415])
+def test_design_413_and_415_still_raise(status: int, sync_client: MagicMock) -> None:
+    # Only Image Search takes an image input; Design Search documents neither status.
+    _des_search(sync_client).side_effect = OctenAPIError("rejected", status_code=status)
+
+    with pytest.raises(OctenAPIError):
+        _design().invoke({"query": "q"})
+
+
 TOOLS = [
     (OctenImageSearch, _img_search, {"query": "q"}),
     (OctenDesignSearch, _des_search, {"query": "q"}),

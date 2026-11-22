@@ -357,6 +357,11 @@ same dict and splits errors the same way as the vertical search tools above.
   refused without a request and the model is told which to pass. The model can only pass an
   image by URL: base64 data and `data:` URIs are refused. To search with image bytes, call
   `octen.Octen().image_search.search(inputs=[{"type": "image", "data": ...}])` directly.
+  An `image_url` must have a host name, e.g. `https://:443/photo.png` is refused too.
+- **A rejected image goes back to the model.** Unlike the other 4xx responses, 413 (image
+  too large) and 415 (unsupported format) are returned to the model with a hint to try a
+  smaller image, a supported format or another image URL. Authentication, access and
+  balance errors are still raised.
 - **Results.** `data` is the response's data unchanged: `data.results` holds each image's
   `title`, `url`, `source_page`, `description`, `width`, `height` and `thumbnail`. The
   response's `meta` (usage, latency) is not part of the tool result; a non-empty

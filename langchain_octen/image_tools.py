@@ -36,6 +36,13 @@ from langchain_octen.vertical_tools import (
 # Limits from https://docs.octen.ai/api-reference/image-search.md
 _IMAGE_MAX_COUNT = 10
 _IMAGE_MAX_DOMAINS = 10
+# The image is the model's choice, so these rejections go back to it.
+_IMAGE_INPUT_HINTS = {
+    413: "The image is too large: it must be at most 5MB. Try a smaller image or another "
+    "image URL.",
+    415: "The image format is not supported: use a JPEG, PNG, WEBP, BMP, TIFF, ICO, DIB, "
+    "ICNS or SGI image, or try another image URL.",
+}
 
 # --- Image Search ------------------------------------------------------------------------
 
@@ -98,10 +105,14 @@ class OctenImageSearchInput(BaseModel):
     @field_validator("image_url", mode="after")
     @classmethod
     def _check_url(cls, value: Optional[str]) -> Optional[str]:
-        parsed = urlparse(value) if value is not None else None
-        if parsed is not None and (
-            parsed.scheme.lower() not in ("http", "https") or not parsed.netloc
-        ):
+        if value is None:
+            return value
+        try:
+            parsed = urlparse(value)
+            ok = parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+        except ValueError:  # e.g. an unclosed IPv6 bracket
+            ok = False
+        if not ok:
             raise ValueError(
                 "must be the public http(s) URL of an image; base64 data and data: URIs "
                 "are not accepted"
@@ -144,6 +155,12 @@ class OctenImageSearch(_OctenVerticalTool):
     _sdk_method: ClassVar[Tuple[str, str]] = ("image_search", "search")
     _request_model: ClassVar[Any] = octen.ImageSearchRequest
     _developer_options: ClassVar[Tuple[str, ...]] = ("count", "safesearch")
+
+    def _model_error(self, exc: Exception) -> Optional[str]:
+        status = getattr(exc, "status_code", None)
+        if isinstance(exc, octen.OctenAPIError) and status in _IMAGE_INPUT_HINTS:
+            return f"{exc}. {_IMAGE_INPUT_HINTS[status]}"
+        return super()._model_error(exc)
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         inputs = [{"type": "text", "data": _PLACEHOLDER_QUERY}]

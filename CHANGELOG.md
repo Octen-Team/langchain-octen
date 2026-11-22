@@ -10,7 +10,9 @@
     http(s) URL), plus `include_domains` / `exclude_domains` (up to 10 each, matched against
     each result's source page). A call with both inputs or neither is refused without a
     request, and the model is told which to pass. Base64 images are not accepted from the
-    model; call `octen` directly for those.
+    model; call `octen` directly for those. An `image_url` must be http(s) with a host name.
+  - 413 (image too large) and 415 (unsupported format) are returned to the model with a hint
+    to try another image, instead of being raised like other 4xx responses.
   - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor
     options, checked when the tool is built.
 - `OctenDesignSearch` (`octen_design_search`): Design Search, design references (web pages,
