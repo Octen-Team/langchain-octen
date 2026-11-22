@@ -14,6 +14,7 @@ LangChain integration for [Octen Web Search](https://octen.ai). Use Octen's fast
 | `OctenBusinessSearch` | `octen_business_search` | Company and person cards (financials, key people, career history) |
 | `OctenPulseSearch` | `octen_pulse_search` | The URL of a docs page or site you could almost name |
 | `OctenPlaceSearch` | `octen_place_search` | Real-world places, near a point or in a city |
+| `OctenExtract` | `octen_extract` | The clean content of pages you already have the URLs of |
 
 ## Installation
 
@@ -297,6 +298,45 @@ for place in result["data"].get("places", []):
 ```
 
 The tool sets `user_location.type` to `"approximate"` itself.
+
+## Extract (`OctenExtract`)
+
+Reads web pages by URL and returns their clean content (markdown by default). The model
+passes the URLs and, only when it wants excerpts about one topic, a `query`: each result
+then carries ranked `highlights` instead of `full_content`. It returns the same dict and
+splits errors the same way as the vertical search tools above.
+
+| Model arguments | Constructor options |
+|---|---|
+| `urls`, `query` (max 500 characters) | `max_urls` (1-20, default 5), `mode` (`"standard"`, `"advanced"` or `"auto"`), `format` (`"markdown"` or `"text"`), `max_age_seconds` (300-31536000), `url_timeout` (1-60), `include_images`, `include_videos`, `include_audio`, `include_links` (e.g. `{"scope": "prefer_external", "max_links": 50}`; `{}` for the server defaults), `timeout` |
+
+- **`max_urls` caps each call.** A call with more URLs is refused without a request, and
+  the model is told how many it sent and to split them into several calls. The tool
+  description tells the model the cap. Each URL must be 1-2048 characters.
+- **Every URL comes back.** `data.results` has one item per requested URL, in request
+  order: `status` is `"success"` (with `title`, `full_content` or `highlights`,
+  `time_published` / `time_last_crawled` when known, `category`, `page_structure`, and
+  media or links only if you enabled them) or `"failed"` with an `error_message`. Failed
+  URLs are not billed; the server then attaches a `warning` such as
+  `"1 URL(s) failed and were not billed"`. Content is not truncated.
+- **Billing.** `resolved_mode` on each successful item is the mode it was billed at
+  (`auto` picks per URL; `advanced` is priced higher). The aggregate usage counts in the
+  response's `meta` are not part of the tool result.
+- **Two timeouts.** `url_timeout` is the server-side limit per URL (the API's `timeout`,
+  server default 30). `timeout` is the client-side limit for the whole call; left unset it
+  is `url_timeout` (or 30) plus 90 seconds. If you set it, keep it above `url_timeout`.
+
+```python
+from langchain_octen import OctenExtract
+
+tool = OctenExtract(max_urls=3)
+result = tool.invoke({"urls": ["https://example.com/", "https://docs.octen.ai/"]})
+for item in result["data"]["results"]:
+    if item["status"] == "success":
+        print(item["url"], item.get("title"), len(item.get("full_content") or ""))
+    else:
+        print(item["url"], "failed:", item.get("error_message"))
+```
 
 ## Retries
 

@@ -13,6 +13,20 @@
     accept only the `enable` and `max_tokens` keys, and `start_time` / `end_time` must be
     RFC 3339 times (e.g. `2025-01-01T00:00:00Z`).
   - Return shape and error handling are the same as the vertical tools.
+- `OctenExtract` (`octen_extract`): Extract, the clean content of web pages read by URL.
+  - The model gets `urls` and an optional `query` (ranked highlights instead of the full
+    content). `max_urls` (default 5, 1-20) caps the URLs per call: a call with more is
+    refused without a request, and the model is told to split it. `mode`, `format`,
+    `max_age_seconds`, `url_timeout` (the API's per-URL `timeout`), `include_images`,
+    `include_videos`, `include_audio`, `include_links` and `timeout` are constructor
+    options, checked when the tool is built.
+  - `data.results` holds one item per URL, failures included (`status: "failed"` with
+    `error_message`; failed URLs are not billed). Each successful item's `resolved_mode`
+    is the mode it was billed at. Return shape and error handling are the same as the
+    vertical tools.
+  - Left unset, `timeout` (the client-side limit for the whole call) is `url_timeout`, or
+    the server default of 30, plus 90 seconds, so the client does not give up while the
+    server is still within its per-URL limit.
 
 ### Changed
 
