@@ -11,6 +11,7 @@ import copy
 import ipaddress
 import re
 from contextvars import ContextVar
+from datetime import datetime, timedelta
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
 
@@ -77,17 +78,27 @@ _NO_INPUT = (
     "of an image, to find visually similar images). No request was made."
 )
 _Domains = Optional[List[str]]
-# A DNS host in its IDNA ASCII form: dot-separated labels of letters, digits, "-" and "_".
-_DNS_HOST = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.?", re.ASCII)
 _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+# ASCII that cannot appear in a host; non-ASCII is left to the server, since a false
+# rejection of a valid internationalized host is worse than a server-side 4xx.
+_NOT_IN_HOST = frozenset("\\<>\"'`@[]")
+_BRACKETED = re.compile(r"\[([^\[\]]+)\](?::[0-9]*)?")
 
 
-def _valid_host(host: str) -> bool:
-    """Raises ValueError (UnicodeError included) for a host that cannot be valid."""
-    if ":" in host:  # urlparse strips the brackets of an IPv6 literal
-        ipaddress.IPv6Address(host)
+def _valid_authority(netloc: str) -> bool:
+    """Raises ValueError for a malformed IPv6 literal."""
+    userinfo, _, hostport = netloc.rpartition("@")
+    if any(ch in "@[]" for ch in userinfo):
+        return False
+    if hostport.startswith("["):
+        # Exactly [addr] and an optional :port; Python 3.9's urlparse lets trailing text by.
+        match = _BRACKETED.fullmatch(hostport)
+        if match is None:
+            return False
+        ipaddress.IPv6Address(match.group(1))
         return True
-    return bool(_DNS_HOST.fullmatch(host.encode("idna").decode("ascii")))
+    host = hostport.split(":", 1)[0]
+    return bool(host) and not any(ch in _NOT_IN_HOST for ch in hostport)
 
 
 # The model's image URL for the call in progress (None for a text query); a signed URL can
@@ -97,20 +108,36 @@ _CURRENT_IMAGE_URL: ContextVar[Optional[str]] = ContextVar("_CURRENT_IMAGE_URL",
 
 def _without_upstream_text(exc: Exception) -> Exception:
     """A copy of ``exc`` (same class, status and request id) without upstream text."""
-    # __new__ skips __init__, whose signature varies by class.
+    # __new__ skips __init__, whose signature varies by class; only the safe metadata is
+    # copied, so notes and other attributes of the original do not carry over.
     clean = type(exc).__new__(type(exc))
-    clean.__dict__.update(exc.__dict__)
     text = (
         f"Octen Image Search failed for an image URL input ({type(exc).__name__}); the "
         "upstream message is withheld because it may contain the URL."
     )
     clean.args = (text,)
-    for attr, value in (("message", text), ("response_data", None), ("errors", [])):
-        if hasattr(clean, attr):
-            setattr(clean, attr, value)
-    clean.__cause__ = clean.__context__ = None
-    clean.__traceback__ = None
+    if isinstance(exc, octen.OctenError):
+        setattr(clean, "message", text)
+    for attr in ("status_code", "request_id", "code", "timeout", "request_sent", "retry_after"):
+        if hasattr(exc, attr):
+            setattr(clean, attr, getattr(exc, attr))
+    for attr, empty in (("response_data", None), ("errors", [])):
+        if hasattr(exc, attr):
+            setattr(clean, attr, empty)
     return clean
+
+
+_INSTANT = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)")
+
+
+def _instant(value: str) -> datetime:
+    """The instant of an RFC 3339 time already checked by ``_is_rfc3339``."""
+    match = _INSTANT.fullmatch(value)
+    assert match is not None
+    base, fraction, offset = match.groups()
+    # fromisoformat before 3.11 takes neither Z nor fractions other than 3 or 6 digits.
+    moment = datetime.fromisoformat(base + ("+00:00" if offset == "Z" else offset))
+    return moment + timedelta(microseconds=int((fraction or "0")[:6].ljust(6, "0")))
 
 
 def _not_blank(value: Optional[str]) -> Optional[str]:
@@ -165,10 +192,9 @@ class OctenImageSearchInput(BaseModel):
             raise ValueError("must be a URL without malformed percent escapes")
         try:
             parsed = urlparse(value)
-            host = parsed.hostname or ""
-            ok = parsed.scheme.lower() in ("http", "https") and _valid_host(host)
+            ok = parsed.scheme.lower() in ("http", "https") and _valid_authority(parsed.netloc)
             parsed.port  # raises ValueError on a non-numeric or out-of-range port
-        except ValueError:  # e.g. an unclosed IPv6 bracket, a bad port or IDNA failure
+        except ValueError:  # e.g. an unclosed IPv6 bracket or a bad port
             ok = False
         if not ok:
             raise ValueError(
@@ -300,9 +326,7 @@ _DESIGN_DESCRIPTION = (
     "screen or a slide (`type`: web_page, web_section, app_screen or slide) with its "
     "`url`, `thumbnail`, `title`, a text `description` and the `source_page` it comes "
     "from (not for app screens). When returned, `design_facts` holds its design values "
-    "(colors, fonts, font sizes and the like) and `snippet` reusable HTML code. Web "
-    "results on the same query (title, url, highlight) come back alongside in "
-    "`results`.\n\n"
+    "(colors, fonts, font sizes and the like) and `snippet` reusable HTML code.{web}\n\n"
     "Pass `query` (max 500 characters) describing what to find, e.g. 'pricing section "
     "for a SaaS landing page' or 'iOS onboarding screen'.\n\n"
     "Sections of one web page and slides of one deck carry a `group` (group_id, type, "
@@ -313,6 +337,9 @@ _DESIGN_DESCRIPTION = (
 )
 # The API's default for images.count.
 _DESIGN_DEFAULT_IMAGES = 5
+_DESIGN_WEB_SENTENCE = (
+    " Web results on the same query (title, url, highlight) come back alongside in `results`."
+)
 # With images.enable false only the web results come back, so group_id is not offered.
 _DESIGN_WEB_ONLY_DESCRIPTION = (
     "Search the web for pages about user interface and slide design, e.g. 'pricing "
@@ -403,7 +430,7 @@ class OctenDesignSearch(_OctenVerticalTool):
 
     name: str = "octen_design_search"
     description: str = _DESIGN_DESCRIPTION.format(
-        limit=f"up to {_DESIGN_DEFAULT_IMAGES} images (the default)"
+        limit=f"up to {_DESIGN_DEFAULT_IMAGES} images (the default)", web=_DESIGN_WEB_SENTENCE
     )
     args_schema: Type[BaseModel] = OctenDesignSearchInput
 
@@ -436,8 +463,16 @@ class OctenDesignSearch(_OctenVerticalTool):
             return self
         if not self._images_enabled():
             self.description = _DESIGN_WEB_ONLY_DESCRIPTION
-        elif isinstance(count, int):
-            self.description = _DESIGN_DESCRIPTION.format(limit=f"up to {count} images")
+            return self
+        limit = (
+            f"up to {count} images"
+            if isinstance(count, int)
+            else (f"up to {_DESIGN_DEFAULT_IMAGES} images (the default)")
+        )
+        web_on = (self.web_search or {}).get("enable") is not False
+        self.description = _DESIGN_DESCRIPTION.format(
+            limit=limit, web=_DESIGN_WEB_SENTENCE if web_on else ""
+        )
         return self
 
     def _check_query(self, query: Optional[str]) -> None:
@@ -473,6 +508,16 @@ class OctenDesignSearch(_OctenVerticalTool):
                     f"invalid {self.name} option: web_search.{key}: must be an RFC 3339 "
                     "time, e.g. 2025-01-01T00:00:00Z"
                 )
+        start, end = web.get("start_time"), web.get("end_time")
+        if start is not None and end is not None and _instant(end) < _instant(start):
+            raise ValueError(
+                f"invalid {self.name} option: web_search.end_time is before start_time"
+            )
+        if not self._images_enabled() and web.get("enable") is False:
+            raise ValueError(
+                f"invalid {self.name} option: images.enable and web_search.enable are both "
+                "false, so every call would return nothing"
+            )
 
     def _request(self, model_args: Dict[str, Any]) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}

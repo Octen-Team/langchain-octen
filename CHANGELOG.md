@@ -34,7 +34,8 @@
     are constructor options, checked when the tool is built: `images.group_id` is refused
     (it is the model's), `highlight` and `full_content` accept only the `enable` and
     `max_tokens` keys, `language` must be one of the documented ISO 639-1 codes and
-    `start_time` / `end_time` must be RFC 3339 times. Left unset, the server defaults apply,
+    `start_time` / `end_time` must be RFC 3339 times with the end not before the start, and
+    turning off both images and web results is refused. Left unset, the server defaults apply,
     so each image carries `design_facts` and a snippet of up to 5000 tokens (large output);
     `images={"design_facts": False, "snippet": {"enable": False}}` turns them off and
     `images={"snippet": {"max_tokens": ...}}` shortens the snippets.

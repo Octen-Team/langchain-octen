@@ -421,7 +421,9 @@ when they are returned. Web results on the same query come back alongside in
   | return fewer images | `images={"count": 3}` |
   | drop the web results | `web_search={"enable": False}` |
 
-  A part you turned off is absent from `data`.
+  A part you turned off is absent from `data`, and the tool description stops offering it.
+  Turning both off raises `ValueError` at construction, as does a `web_search.end_time`
+  before its `start_time`.
 
 ```python
 from langchain_octen import OctenDesignSearch

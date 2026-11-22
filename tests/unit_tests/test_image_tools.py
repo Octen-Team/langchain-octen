@@ -333,8 +333,14 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://exa%zzmple.com/a.png"}, "image_url"),
         ({"image_url": "https://example.com/a%zz.png"}, "image_url"),
         ({"image_url": "https://example.com/a%4.png"}, "image_url"),
-        ({"image_url": "https://a..b.com/a.png"}, "image_url"),
         ({"image_url": "https://[2001:zz::1]/a.png"}, "image_url"),
+        ({"image_url": "https://[2001:4860::1]junk:443/a.png"}, "image_url"),
+        ({"image_url": "https://[2001:4860::1]:44x/a.png"}, "image_url"),
+        ({"image_url": "https://ex[am]ple.com/a.png"}, "image_url"),
+        ({"image_url": "https://a@b@example.com/a.png"}, "image_url"),
+        ({"image_url": 'https://exa"mple.com/a.png'}, "image_url"),
+        ({"image_url": "https://exa'mple.com/a.png"}, "image_url"),
+        ({"image_url": "https://exa`mple.com/a.png"}, "image_url"),
         ({"query": "   "}, "query"),
         ({"query": "\t\n"}, "query"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
@@ -366,8 +372,14 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-bad-escape-in-host",
         "url-bad-escape-in-path",
         "url-short-escape",
-        "url-empty-label",
         "url-bad-ipv6",
+        "url-ipv6-trailing-junk",
+        "url-ipv6-bad-port",
+        "url-brackets-in-host",
+        "url-two-at-signs",
+        "url-double-quote",
+        "url-single-quote",
+        "url-backtick",
         "query-blank",
         "query-whitespace",
         "include-11",
@@ -438,8 +450,26 @@ def test_image_url_without_host_gets_guidance(url: str, sync_client: MagicMock) 
         "https://\u0930\u093e\u091c\u092d\u093e\u0937\u093e.\u092d\u093e\u0930\u0924/a.png",
         # The same kind of host in its punycode (IDNA ASCII) form.
         "https://xn--81b8ah4a6acb.xn--h2brj9c/a.png",
+        # An Arabic label ending in a digit: valid IDNA2008, refused by Python's IDNA2003.
+        "https://\u0645\u062b\u0627\u06441.\u0645\u0635\u0631/a.png",
+        "https://xn--1-ymcl5hc.xn--wgbh1c/a.png",
+        "https://[2001:db8::1]:8443/a.png",
+        "https://user:pass@example.com/a.png",
     ],
-    ids=["http", "upper", "port", "escape", "ipv6", "underscore", "idn-marks", "punycode"],
+    ids=[
+        "http",
+        "upper",
+        "port",
+        "escape",
+        "ipv6",
+        "underscore",
+        "idn-marks",
+        "punycode",
+        "arabic-digit",
+        "arabic-punycode",
+        "ipv6-port",
+        "userinfo",
+    ],
 )
 def test_image_http_urls_accepted(url: str, sync_client: MagicMock) -> None:
     _image().invoke({"image_url": url})
@@ -523,6 +553,22 @@ def test_design_description_states_group_image_limit(images: Any, expected: str)
     description = _design(images=images).description
     assert f"returns the first images of that group in group order, {expected}" in description
     assert "every image" not in description and "all images" not in description
+
+
+def test_design_without_web_promises_no_web_results() -> None:
+    description = _design(web_search={"enable": False}).description
+    assert "`results`" not in description and "Web results" not in description
+    assert "group_id" in description and "screenshot" in description
+
+
+def test_design_with_both_parts_promises_both() -> None:
+    description = _design().description
+    assert "`results`" in description and "screenshot" in description
+
+
+def test_design_with_both_parts_off_raises() -> None:
+    with pytest.raises(ValueError, match="both"):
+        _design(images={"enable": False}, web_search={"enable": False})
 
 
 def test_design_without_images_offers_no_group_lookup() -> None:
@@ -859,6 +905,25 @@ async def test_raised_error_for_image_url_is_sanitized_async(async_client: Magic
     assert info.value.__cause__ is None and info.value.__context__ is None
 
 
+def test_raised_error_for_image_url_drops_notes_and_extras(sync_client: MagicMock) -> None:
+    exc = OctenAPIError("forbidden", status_code=403, request_id="rid-403")
+    exc.__notes__ = [f"while fetching {SIGNED_URL}"]
+    exc.upstream_url = SIGNED_URL  # type: ignore[attr-defined]
+    _img_search(sync_client).side_effect = exc
+
+    with pytest.raises(OctenAPIError) as info:
+        _image().invoke({"image_url": SIGNED_URL})
+
+    raised = info.value
+    rendered = "".join(
+        __import__("traceback").format_exception(type(raised), raised, raised.__traceback__)
+    )
+    for text in (str(raised), repr(raised), rendered, repr(vars(raised))):
+        assert "SECRET-TOKEN" not in text, text
+    assert not hasattr(raised, "__notes__") and not hasattr(raised, "upstream_url")
+    assert (raised.status_code, raised.request_id) == (403, "rid-403")
+
+
 def test_raised_error_for_text_query_is_unchanged(sync_client: MagicMock) -> None:
     _img_search(sync_client).side_effect = SIGNED_403
 
@@ -1004,6 +1069,25 @@ def test_design_model_cannot_set_developer_options(
         ({"web_search": {"start_time": "2025-01-01T24:00:00Z"}}, "start_time"),
         ({"web_search": {"end_time": "2025-01-01T00:00:00+24:00"}}, "end_time"),
         ({"web_search": {"end_time": "2025-01-01t00:00:00z"}}, "end_time"),
+        (
+            {
+                "web_search": {
+                    "start_time": "2025-06-01T00:00:00Z",
+                    "end_time": "2025-01-01T00:00:00Z",
+                }
+            },
+            "end_time",
+        ),
+        # 00:00+01:00 is 23:00Z the day before: earlier, though the string sorts later.
+        (
+            {
+                "web_search": {
+                    "start_time": "2025-01-01T00:00:00Z",
+                    "end_time": "2025-01-01T00:00:00.5+01:00",
+                }
+            },
+            "end_time",
+        ),
         ({"web_search": {"include_domains": ["a" * 61]}}, "include_domains"),
         ({"web_search": {"exclude_domains": ["a.com"] * 1201}}, "exclude_domains"),
         ({"web_search": {"safesearch": "off"}}, "safesearch"),
@@ -1036,6 +1120,18 @@ def test_design_invalid_developer_option_raises(
         {"web_search": {"count": 100}},
         {"web_search": {"language": ["ar", "zh"]}},
         {"images": IMAGES, "web_search": WEB},
+        {
+            "web_search": {
+                "start_time": "2025-01-01T08:00:00+08:00",
+                "end_time": "2025-01-01T00:00:00Z",
+            }
+        },
+        {
+            "web_search": {
+                "start_time": "2025-01-01T00:00:00Z",
+                "end_time": "2025-01-01T00:00:00.000001Z",
+            }
+        },
     ],
     ids=repr,
 )
