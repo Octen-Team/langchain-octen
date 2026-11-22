@@ -1135,14 +1135,14 @@ files = [
 
 [[package]]
 name = "octen"
-version = "0.12.0"
+version = "0.13.0"
 description = "Official Python SDK for Octen API - Web Search, URL Extract, Text/VL Embeddings, and LLM Chat"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "octen-0.12.0-py3-none-any.whl", hash = "sha256:0259687753070d4f328944faa8db33243e51710d8de62a6423ff4a9b381c3d48"},
-    {file = "octen-0.12.0.tar.gz", hash = "sha256:26ca3d358069c0899959fedd78330dcb7c01e64a8adddd6699226e2cc43fd9ae"},
+    {file = "octen-0.13.0-py3-none-any.whl", hash = "sha256:17540280297ea1a0b56d8665e4a6ab1c21a14de8e46cf842e689469022e54306"},
+    {file = "octen-0.13.0.tar.gz", hash = "sha256:0bf578b03d8d36b09a0644bf1ef7e2d4186c2c81430c99e69ece5ab3dda61ad7"},
 ]
 
 [package.dependencies]
@@ -2794,4 +2794,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "d825ffb03c630ff636a3ffcef702b4c5201f94dcc74ff5da02a3e6467c73f25e"
+content-hash = "4361877bb5d0a992a3043825a9a4dd51e4ce0223cc7fb9166e5881b7d204ab8c"

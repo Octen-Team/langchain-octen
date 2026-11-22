@@ -14,9 +14,11 @@ from langchain_tests.unit_tests import ToolsUnitTests  # noqa: E402
 from langchain_octen import (  # noqa: E402
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenExtract,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
     OctenSearchResults,
 )
 
@@ -91,6 +93,16 @@ class TestOctenPulseSearchStandard(_OctenVerticalStandardTests):
         return {"query": "github docs"}
 
 
+class TestOctenSearchPremierStandard(_OctenVerticalStandardTests):
+    @property
+    def tool_constructor(self) -> Type[BaseTool]:
+        return OctenSearchPremier
+
+    @property
+    def tool_invoke_params_example(self) -> Dict[str, Any]:
+        return {"query": "Kafka default retention period", "include_domains": ["apache.org"]}
+
+
 class TestOctenPlaceSearchStandard(_OctenVerticalStandardTests):
     @property
     def tool_constructor(self) -> Type[BaseTool]:
@@ -99,3 +111,13 @@ class TestOctenPlaceSearchStandard(_OctenVerticalStandardTests):
     @property
     def tool_invoke_params_example(self) -> Dict[str, Any]:
         return {"query": "coffee shops", "latitude": 35.6812, "longitude": 139.7671, "radius": 1000}
+
+
+class TestOctenExtractStandard(_OctenVerticalStandardTests):
+    @property
+    def tool_constructor(self) -> Type[BaseTool]:
+        return OctenExtract
+
+    @property
+    def tool_invoke_params_example(self) -> Dict[str, Any]:
+        return {"urls": ["https://example.com/"], "query": "domain"}

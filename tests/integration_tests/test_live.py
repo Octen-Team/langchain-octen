@@ -1,26 +1,34 @@
 """Live tests against the Octen API.
 
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
-tool is invoked once with the smallest result count.
+tool is invoked with a small result count: once, or for the Web Search Premier and
+Extract tests two or three calls (calls with the option and same-input controls). Extract bills
+each successfully read URL; the Extract tests read 15 at most.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import octen
 import pytest
 from octen import OctenAuthenticationError
+from octen.async_client import AsyncExtractResource
 from octen.resources.search import SearchResource
 from pydantic import SecretStr
 
 from langchain_octen import (
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenExtract,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
+    OctenSearchPremier,
     OctenSearchResults,
     _utilities,
     vertical_tools,
@@ -34,16 +42,22 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
-    """Bill each live test at most once: the tools' clients get max_retries=0 here only."""
+    """Bill each request at most once: the tools' clients get max_retries=0 here only.
+
+    Tests in _NO_REQUEST get factories that fail, so they can never send a request.
+    """
     created: List[str] = []
+    no_request = request.node.name in _NO_REQUEST
 
     def sync_client(api_key: SecretStr) -> octen.Octen:
+        assert not no_request, "this test must not send a request"
         created.append("sync")
         return octen.Octen(
             api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
         )
 
     def async_client(api_key: SecretStr) -> octen.AsyncOcten:
+        assert not no_request, "this test must not send a request"
         created.append("async")
         return octen.AsyncOcten(
             api_key=api_key.get_secret_value(), retry_after_send=False, max_retries=0
@@ -53,8 +67,18 @@ def _single_attempt(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequ
         monkeypatch.setattr(module, "sync_client", sync_client)
         monkeypatch.setattr(module, "async_client", async_client)
     yield
-    if request.node.name != "test_out_of_range_developer_count_raises_at_construction":
+    if not no_request:
         assert created, "the tool did not use the patched client factory"
+
+
+# Tests that must not reach the API at all.
+_NO_REQUEST = {
+    "test_out_of_range_developer_count_raises_at_construction",
+    "test_search_premier_model_cannot_set_count",
+    "test_search_premier_bad_option_raises_at_construction",
+    "test_extract_cap_rejects_without_request",
+    "test_extract_model_cannot_set_mode",
+}
 
 
 def _check(name: str, result: Any) -> None:
@@ -150,3 +174,307 @@ def test_bad_key_raises_authentication_error() -> None:
 def test_out_of_range_developer_count_raises_at_construction() -> None:
     with pytest.raises(ValueError, match="count"):
         OctenNewsSearch(count=1000)
+
+
+# The SDK's own Premier live tests use this query; its results span several years.
+TIME_QUERY = "electric vehicle battery"
+YEAR_2025 = ("2025-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
+# Single-bound checks need unfiltered results dated on both sides of the window; on
+# 2026-11-21 they ran from 2022 to 2026-01-30, so the window ends before the latest.
+BOUND_WINDOW = ("2024-01-01T00:00:00Z", "2025-06-30T23:59:59Z")
+_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?")
+
+
+def _ts(value: Any) -> Optional[datetime]:
+    """None when absent; raises on a value that does not parse, so it cannot pass unchecked."""
+    if value is None or value == "":
+        return None
+    match = _STAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError(f"unparseable timestamp {value!r}")
+    base, frac, tz = match.groups()
+    # fromisoformat before 3.11 takes neither Z nor fractions other than 3 or 6 digits.
+    frac = "." + (frac + "000000")[:6] if frac else ""
+    return datetime.fromisoformat(base + frac + ("+00:00" if tz in (None, "Z") else tz))
+
+
+def _published(result: Dict[str, Any]) -> List[Optional[datetime]]:
+    return [_ts(r.get("time_published")) for r in result["data"]["results"]]
+
+
+def _hosts(result: Dict[str, Any]) -> List[str]:
+    return [urlparse(r["url"]).hostname or "" for r in result["data"]["results"]]
+
+
+def _on(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+@pytest.fixture
+def premier_responses(monkeypatch: pytest.MonkeyPatch) -> List[Any]:
+    """Record octen's responses: meta (e.g. result_type) is not part of the tool result."""
+    responses: List[Any] = []
+    original = SearchResource.search_premier
+
+    def spy(self: SearchResource, *args: Any, **kwargs: Any) -> Any:
+        response = original(self, *args, **kwargs)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(SearchResource, "search_premier", spy)
+    return responses
+
+
+def test_search_premier_include_domains() -> None:
+    # Same query with and without the model's domain filter.
+    tool = OctenSearchPremier(count=5)
+    query = "Apache Kafka"
+    control = tool.invoke({"query": query})
+    filtered = tool.invoke({"query": query, "include_domains": ["wikipedia.org"]})
+    _check(f"{tool.name} control", control)
+    _check(f"{tool.name} include_domains", filtered)
+    print(f"control hosts={_hosts(control)} filtered hosts={_hosts(filtered)}")
+    assert any(not _on(h, "wikipedia.org") for h in _hosts(control)), control
+    assert _hosts(filtered), filtered
+    assert all(_on(h, "wikipedia.org") for h in _hosts(filtered)), filtered
+
+
+def test_search_premier_developer_options(premier_responses: List[Any]) -> None:
+    # Same query with server defaults and with full content plus dynamic results.
+    query = "Kafka default retention period for topics"
+    control = OctenSearchPremier(count=2).invoke({"query": query})
+    tool = OctenSearchPremier(
+        count=2, result_type="dynamic", full_content={"enable": True, "max_tokens": 200}
+    )
+    result = tool.invoke({"query": query})
+    _check(f"{tool.name} control", control)
+    _check(f"{tool.name} options", result)
+    metas = [r.meta for r in premier_responses]
+    print(f"meta result_type={[m.get('result_type') for m in metas]}")
+    assert [m.get("result_type") for m in metas] == ["standard", "dynamic"], metas
+    assert 0 < len(control["data"]["results"]) <= 2, control
+    assert 0 < len(result["data"]["results"]) <= 2, result
+    assert not any(r.get("full_content") for r in control["data"]["results"]), control
+    assert all(r.get("full_content") for r in result["data"]["results"]), result
+
+
+@pytest.mark.asyncio
+async def test_search_premier_time_window_async() -> None:
+    # The filtered call first, then the same query without bounds as the control.
+    start, end = _ts(YEAR_2025[0]), _ts(YEAR_2025[1])
+    assert start and end
+    tool = OctenSearchPremier(
+        count=5, time_basis="published", start_time=YEAR_2025[0], end_time=YEAR_2025[1]
+    )
+    result = await tool.ainvoke({"query": TIME_QUERY})
+    _check(f"{tool.name} 2025", result)
+    published = _published(result)
+    print(f"2025 time_published={published}")
+    assert published, result
+    assert all(t is not None and start <= t <= end for t in published), published
+
+    control = await OctenSearchPremier(count=5, time_basis="published").ainvoke(
+        {"query": TIME_QUERY}
+    )
+    _check(f"{tool.name} control", control)
+    print(f"control time_published={_published(control)}")
+    assert any(t and not start <= t <= end for t in _published(control)), control
+
+
+def test_search_premier_each_time_bound() -> None:
+    # Without start_time a result before the window comes back, and without end_time one after.
+    start, end = _ts(BOUND_WINDOW[0]), _ts(BOUND_WINDOW[1])
+    assert start and end
+    # Unfiltered control first: dated results on both sides make each bound check discriminate.
+    unfiltered = OctenSearchPremier(count=10, time_basis="published").invoke({"query": TIME_QUERY})
+    _check("unfiltered", unfiltered)
+    print(f"unfiltered time_published={_published(unfiltered)}")
+    unfiltered_dated = [t for t in _published(unfiltered) if t]
+    stale = "the live index changed; pick a new TIME_QUERY / BOUND_WINDOW"
+    assert any(t < start for t in unfiltered_dated), f"no result before start: {stale}"
+    assert any(t > end for t in unfiltered_dated), f"no result after end: {stale}"
+    end_only = OctenSearchPremier(count=10, time_basis="published", end_time=BOUND_WINDOW[1])
+    start_only = OctenSearchPremier(count=10, time_basis="published", start_time=BOUND_WINDOW[0])
+    before = end_only.invoke({"query": TIME_QUERY})
+    after = start_only.invoke({"query": TIME_QUERY})
+    _check("end-only", before)
+    _check("start-only", after)
+    print(f"end-only time_published={_published(before)}")
+    print(f"start-only time_published={_published(after)}")
+    # Each call keeps its own bound, and its control shows the result on the other side.
+    before_dated = [t for t in _published(before) if t]
+    after_dated = [t for t in _published(after) if t]
+    assert before_dated and all(t <= end for t in before_dated), before
+    assert after_dated and all(t >= start for t in after_dated), after
+    assert any(t < start for t in before_dated), before
+    assert any(t > end for t in after_dated), after
+
+
+def test_search_premier_model_cannot_set_count() -> None:
+    result = OctenSearchPremier(count=1).invoke({"query": "Apache Kafka", "count": 50})
+    assert isinstance(result, str) and "count" in result, result
+
+
+def test_search_premier_bad_option_raises_at_construction() -> None:
+    with pytest.raises(ValueError, match="result_type"):
+        OctenSearchPremier(result_type="smart")
+
+
+# Stable public pages; .invalid is reserved (RFC 2606), so that host never resolves.
+EXAMPLE = "https://example.com/"
+DOCS = "https://docs.octen.ai/api-reference/extract"
+# The page the API reference uses for its media example.
+WITH_IMAGES = "https://octen.ai/"
+UNREACHABLE = "https://nonexistent.invalid/"
+
+
+def _items(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return result["data"]["results"]  # type: ignore[no-any-return]
+
+
+def _by_url(result: Dict[str, Any], urls: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Items keyed by url; each input URL must come back exactly once, with no extras."""
+    items = _items(result)
+    assert sorted(i["url"] for i in items) == sorted(urls), items
+    return {i["url"]: i for i in items}
+
+
+def test_extract_reads_pages() -> None:
+    tool = OctenExtract(max_urls=2)
+    result = tool.invoke({"urls": [EXAMPLE, DOCS]})
+    _check(tool.name, result)
+    items = list(_by_url(result, [EXAMPLE, DOCS]).values())
+    print(f"titles={[i.get('title') for i in items]}")
+    assert all(i["status"] == "success" for i in items), items
+    assert all(i.get("full_content") and i.get("title") for i in items), items
+    assert not any(i.get("highlights") for i in items), items
+    # Links are opt-in: without include_links none come back.
+    assert not any(i.get("links") for i in items), items
+
+
+@pytest.mark.asyncio
+async def test_extract_failed_url_reported_per_url_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: List[Any] = []
+    original = AsyncExtractResource.extract
+
+    async def spy(self: AsyncExtractResource, *args: Any, **kwargs: Any) -> Any:
+        response = await original(self, *args, **kwargs)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(AsyncExtractResource, "extract", spy)
+    tool = OctenExtract(max_urls=2)
+    result = await tool.ainvoke({"urls": [EXAMPLE, UNREACHABLE]})
+    _check(tool.name, result)
+    by_url = _by_url(result, [EXAMPLE, UNREACHABLE])
+    ok, failed = by_url[EXAMPLE], by_url[UNREACHABLE]
+    print(f"failed item={failed} usage={responses[0].usage}")
+    assert ok["url"] == EXAMPLE and ok["status"] == "success" and ok.get("full_content"), ok
+    assert failed["url"] == UNREACHABLE and failed["status"] == "failed", failed
+    assert failed.get("error_message"), failed
+    assert not failed.get("full_content"), failed
+    # Only the page that was read is billed.
+    assert responses[0].successful_urls == 1, responses[0].meta
+
+
+def test_extract_query_returns_highlights() -> None:
+    # The same page with the model's query and without it.
+    tool = OctenExtract(max_urls=1)
+    focused = tool.invoke({"urls": [DOCS], "query": "how long cached content is kept"})
+    control = tool.invoke({"urls": [DOCS]})
+    _check(f"{tool.name} query", focused)
+    _check(f"{tool.name} control", control)
+    (item,), (plain,) = _items(focused), _items(control)
+    print(f"highlights={item.get('highlights')!r:.300}")
+    assert item["status"] == "success" and item.get("highlights"), item
+    assert not item.get("full_content"), item
+    assert plain.get("full_content") and not plain.get("highlights"), plain
+
+
+def test_extract_advanced_mode_reaches_server() -> None:
+    advanced = OctenExtract(max_urls=1, mode="advanced").invoke({"urls": [EXAMPLE]})
+    control = OctenExtract(max_urls=1).invoke({"urls": [EXAMPLE]})
+    _check("advanced", advanced)
+    _check("control", control)
+    (item,), (plain,) = _items(advanced), _items(control)
+    print(f"resolved_mode={item.get('resolved_mode')} control={plain.get('resolved_mode')}")
+    # octen documents that an advanced request may resolve to standard: re-check before
+    # calling a failure here a forwarding bug.
+    assert item["status"] == "success" and item["resolved_mode"] == "advanced", item
+    assert plain["resolved_mode"] == "standard", plain
+
+
+def test_extract_text_format_reaches_server() -> None:
+    text = OctenExtract(max_urls=1, format="text").invoke({"urls": [DOCS]})
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("text", text)
+    _check("markdown control", control)
+    (item,), (plain,) = _items(text), _items(control)
+    markdown_heading = re.compile(r"^#{1,6} ", re.MULTILINE)
+    print(f"text={item.get('full_content')!r:.200}\nmarkdown={plain.get('full_content')!r:.200}")
+    assert markdown_heading.search(plain["full_content"]), plain
+    assert item.get("full_content") and not markdown_heading.search(item["full_content"]), item
+
+
+def test_extract_links_reach_server() -> None:
+    # The control takes the server's default link cap (200) and must return more than 3.
+    control = OctenExtract(max_urls=1, include_links={}).invoke({"urls": [DOCS]})
+    _check("links control", control)
+    (plain,) = _items(control)
+    print(f"control links={len(plain.get('links') or [])}")
+    assert len(plain.get("links") or []) > 3, plain
+    linked = OctenExtract(max_urls=1, include_links={"max_links": 3}).invoke({"urls": [DOCS]})
+    _check("links", linked)
+    (item,) = _items(linked)
+    print(f"links={item.get('links')}")
+    assert len(item.get("links") or []) == 3, item
+    assert all(link.get("url") for link in item["links"]), item
+
+
+def test_extract_images_reach_server() -> None:
+    # The flagged call first, so a missing flag fails before the control is billed.
+    flagged = OctenExtract(max_urls=1, include_images=True).invoke({"urls": [WITH_IMAGES]})
+    _check("images", flagged)
+    (item,) = _items(flagged)
+    print(f"images={item.get('images')!r:.300} cover_image={item.get('cover_image')}")
+    assert item["status"] == "success" and item.get("images"), item
+    assert all(image.get("url") for image in item["images"]), item
+    assert (item.get("cover_image") or {}).get("url"), item
+    control = OctenExtract(max_urls=1).invoke({"urls": [WITH_IMAGES]})
+    _check("images control", control)
+    (plain,) = _items(control)
+    assert plain["status"] == "success" and not plain.get("images"), plain
+    assert not plain.get("cover_image"), plain
+
+
+def test_extract_max_age_reaches_server() -> None:
+    # Control first: the check only discriminates when the default-cache copy is stale.
+    # time_last_crawled is when Octen last fetched the page; allow 60 s of clock skew.
+    window, margin = timedelta(seconds=300), timedelta(seconds=60)
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("max_age control", control)
+    cached = _ts(_items(control)[0].get("time_last_crawled"))
+    print(f"control time_last_crawled={cached}")
+    assert cached is not None, control
+    if cached >= datetime.now(timezone.utc) - window - margin:
+        pytest.skip(f"inconclusive: the cached copy of {DOCS} is fresh ({cached})")
+    sent = datetime.now(timezone.utc)
+    fresh = OctenExtract(max_urls=1, max_age_seconds=300).invoke({"urls": [DOCS]})
+    received = datetime.now(timezone.utc)
+    _check("max_age_seconds=300", fresh)
+    (item,) = _items(fresh)
+    crawled = _ts(item.get("time_last_crawled"))
+    print(f"sent={sent.isoformat()} time_last_crawled={crawled}")
+    assert crawled is not None, item
+    assert sent - window - margin <= crawled <= received + margin, item
+    assert crawled > cached, item
+
+
+def test_extract_cap_rejects_without_request() -> None:
+    result = OctenExtract(max_urls=1).invoke({"urls": [EXAMPLE, DOCS]})
+    assert isinstance(result, str) and "at most 1" in result, result
+
+
+def test_extract_model_cannot_set_mode() -> None:
+    result = OctenExtract().invoke({"urls": [EXAMPLE], "mode": "advanced"})
+    assert isinstance(result, str) and "mode" in result, result

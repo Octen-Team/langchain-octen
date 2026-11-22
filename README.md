@@ -8,11 +8,13 @@ LangChain integration for [Octen Web Search](https://octen.ai). Use Octen's fast
 | Tool class | Tool name | Use it for |
 |---|---|---|
 | `OctenSearchResults` | `octen_search` | One focused web lookup |
+| `OctenSearchPremier` | `octen_search_premier` | A hard-to-find specific fact or page (deeper retrieval and reranking) |
 | `OctenBroadSearch` | `octen_broad_search` | Multi-part questions, comparisons, surveys (fans out into sub-queries) |
 | `OctenNewsSearch` | `octen_news_search` | Recent news, with articles grouped into storylines |
 | `OctenBusinessSearch` | `octen_business_search` | Company and person cards (financials, key people, career history) |
 | `OctenPulseSearch` | `octen_pulse_search` | The URL of a docs page or site you could almost name |
 | `OctenPlaceSearch` | `octen_place_search` | Real-world places, near a point or in a city |
+| `OctenExtract` | `octen_extract` | The clean content of pages you already have the URLs of |
 
 ## Installation
 
@@ -127,8 +129,8 @@ results = tool.invoke({"query": "Python documentation"})
 
 ## Vertical search tools
 
-`OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`, `OctenPulseSearch` and
-`OctenPlaceSearch` share one design:
+`OctenSearchPremier`, `OctenBroadSearch`, `OctenNewsSearch`, `OctenBusinessSearch`,
+`OctenPulseSearch` and `OctenPlaceSearch` share one design:
 
 - **The model only controls the query and search filters; you control the billing-related
   options and limits** (result counts, highlight / full content, Broad `max_queries`, ...)
@@ -184,6 +186,30 @@ tools = [
     OctenPlaceSearch(places={"count": 5}),
 ]
 agent = create_agent(model=llm, tools=tools)
+```
+
+### Web Search Premier (`OctenSearchPremier`)
+
+Web search with deeper retrieval and reranking, for questions that need the exact page
+holding the answer: a specific fact, a detail deep inside a page, a niche document or a
+named report. Same request options and response shape as Web Search (`data.query`,
+`data.results`). For low-latency lookups use `OctenSearchResults` instead.
+
+The model gets the same arguments as `octen_search`; everything else is yours.
+
+| Model arguments | Constructor options |
+|---|---|
+| `query`, `include_domains`, `exclude_domains` | `count` (1-100), `result_type` (`"standard"` or `"dynamic"`), `highlight`, `full_content` (only the `enable` and `max_tokens` keys), `include_text`, `exclude_text` (up to 5, 30 characters each), `language` (ISO 639-1 codes), `time_basis`, `time_range`, `start_time`, `end_time` (RFC 3339, e.g. `2025-01-01T00:00:00Z`), `format`, `safesearch`, `include_images`, `timeout` |
+
+`result_type="dynamic"` returns only relevant results, up to `count`, and adjusts the
+highlight length per result. Unlike `OctenSearchResults`, the constructor takes no
+`include_domains` / `exclude_domains`: those are the model's.
+
+```python
+tool = OctenSearchPremier(count=5, highlight={"enable": True, "max_tokens": 1024})
+result = tool.invoke({"query": "Kafka default retention period for topics"})
+for r in result["data"]["results"]:
+    print(r["title"], r["url"])
 ```
 
 ### Broad Search (`OctenBroadSearch`)
@@ -272,6 +298,49 @@ for place in result["data"].get("places", []):
 ```
 
 The tool sets `user_location.type` to `"approximate"` itself.
+
+## Extract (`OctenExtract`)
+
+Reads web pages by URL and returns their clean content (markdown by default). The model
+passes the URLs and, only when it wants excerpts about one topic, a `query`: each result
+then carries ranked `highlights` instead of `full_content`. It returns the same dict and
+splits errors the same way as the vertical search tools above.
+
+| Model arguments | Constructor options |
+|---|---|
+| `urls`, `query` (max 500 characters) | `max_urls` (1-20, default 5), `mode` (`"standard"`, `"advanced"` or `"auto"`), `format` (`"markdown"` or `"text"`), `max_age_seconds` (300-31536000), `url_timeout` (1-60), `include_images`, `include_videos`, `include_audio`, `include_links` (e.g. `{"scope": "prefer_external", "max_links": 50}`; `{}` for the server defaults), `timeout` |
+
+- **`max_urls` caps each call.** A call with more URLs is refused without a request, and
+  the model is told how many it sent and to split them into several calls. The tool
+  description tells the model the cap. Each URL must be 1-2048 characters.
+- **Failures are reported per URL.** `data.results` holds the per-URL items; match them
+  to your inputs by each item's `url`, not by position. `status` is `"success"` (with
+  `title`, `full_content` or `highlights`, `time_published` / `time_last_crawled` when
+  known, `category`, `page_structure`, and media or links only if you enabled them) or
+  `"failed"` with an `error_message`. Failed URLs are not billed; the server then
+  attaches a `warning` such as `"1 URL(s) failed and were not billed"`. Content is not
+  truncated.
+- **Billing.** `resolved_mode` on each successful item is the mode it was billed at
+  (`auto` picks per URL; `advanced` is priced higher). The aggregate usage counts in the
+  response's `meta` are not part of the tool result.
+- **Two timeouts.** `url_timeout` is the server-side limit per URL (the API's `timeout`,
+  server default 30). `timeout` is the HTTP request timeout octen applies to each attempt
+  (passed as its `request_timeout`); left unset it is `url_timeout` (or 30) plus 90
+  seconds. It is not a deadline for the whole call: octen still retries 408, 429, 500,
+  502, 503 and 504 responses (see [Retries](#retries)), so a call can take longer across
+  attempts. If you set it, keep it above `url_timeout`.
+
+```python
+from langchain_octen import OctenExtract
+
+tool = OctenExtract(max_urls=3)
+result = tool.invoke({"urls": ["https://example.com/", "https://docs.octen.ai/"]})
+for item in result["data"]["results"]:
+    if item["status"] == "success":
+        print(item["url"], item.get("title"), len(item.get("full_content") or ""))
+    else:
+        print(item["url"], "failed:", item.get("error_message"))
+```
 
 ## Retries
 

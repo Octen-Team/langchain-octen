@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- `OctenSearchPremier` (`octen_search_premier`): Web Search Premier, web search with deeper
+  retrieval and reranking for hard-to-find specific facts and pages.
+  - The model gets the same arguments as `octen_search`: `query`, `include_domains`,
+    `exclude_domains`. Result count, `result_type`, highlight / full content, text,
+    language and time filters, `format`, `safesearch`, `include_images` and `timeout` are
+    constructor options, checked when the tool is built; `highlight` and `full_content`
+    accept only the `enable` and `max_tokens` keys, and `start_time` / `end_time` must be
+    RFC 3339 times (e.g. `2025-01-01T00:00:00Z`).
+  - Return shape and error handling are the same as the vertical tools.
+- `OctenExtract` (`octen_extract`): Extract, the clean content of web pages read by URL.
+  - The model gets `urls` and an optional `query` (ranked highlights instead of the full
+    content). `max_urls` (default 5, 1-20) caps the URLs per call: a call with more is
+    refused without a request, and the model is told to split it. `mode`, `format`,
+    `max_age_seconds`, `url_timeout` (the API's per-URL `timeout`), `include_images`,
+    `include_videos`, `include_audio`, `include_links` and `timeout` are constructor
+    options, checked when the tool is built.
+  - `data.results` holds the per-URL items, failures included (`status: "failed"` with
+    `error_message`; failed URLs are not billed); match them to the requested URLs by each
+    item's `url`, not by position. Each successful item's `resolved_mode` is the mode it
+    was billed at. Return shape and error handling are the same as the vertical tools.
+  - Left unset, `timeout` (the HTTP request timeout octen applies to each attempt, passed
+    as its `request_timeout`) is `url_timeout`, or the server default of 30, plus 90
+    seconds, so the client does not give up while the server is still within its per-URL
+    limit. It is not a deadline for the whole call: octen still retries 408, 429, 500,
+    502, 503 and 504 responses.
+
+### Changed
+
+- Requires `octen>=0.13.0,<1.0.0` (the release that adds `search_premier`).
+
+The existing tools are unchanged: same parameters, same requests, same return shape.
+
 ## 0.2.0
 
 ### Upgrading from 0.1.x
