@@ -3,14 +3,14 @@
 Skipped unless OCTEN_LIVE=1 and OCTEN_API_KEY are set. Each call is billed, so every
 tool is invoked with a small result count: once, or for the Web Search Premier and
 Extract tests two or three calls (calls with the option and same-input controls). Extract bills
-each successfully read URL; the Extract tests read 11 at most.
+each successfully read URL; the Extract tests read 15 at most.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -322,6 +322,8 @@ def test_search_premier_bad_option_raises_at_construction() -> None:
 # Stable public pages; .invalid is reserved (RFC 2606), so that host never resolves.
 EXAMPLE = "https://example.com/"
 DOCS = "https://docs.octen.ai/api-reference/extract"
+# The page the API reference uses for its media example.
+WITH_IMAGES = "https://octen.ai/"
 UNREACHABLE = "https://nonexistent.invalid/"
 
 
@@ -417,6 +419,39 @@ def test_extract_links_reach_server() -> None:
     print(f"links={item.get('links')}")
     assert len(item.get("links") or []) == 3, item
     assert all(link.get("url") for link in item["links"]), item
+
+
+def test_extract_images_reach_server() -> None:
+    # The flagged call first, so a missing flag fails before the control is billed.
+    flagged = OctenExtract(max_urls=1, include_images=True).invoke({"urls": [WITH_IMAGES]})
+    _check("images", flagged)
+    (item,) = _items(flagged)
+    print(f"images={item.get('images')!r:.300} cover_image={item.get('cover_image')}")
+    assert item["status"] == "success" and item.get("images"), item
+    assert all(image.get("url") for image in item["images"]), item
+    control = OctenExtract(max_urls=1).invoke({"urls": [WITH_IMAGES]})
+    _check("images control", control)
+    (plain,) = _items(control)
+    assert plain["status"] == "success" and not plain.get("images"), plain
+
+
+def test_extract_max_age_reaches_server() -> None:
+    # time_last_crawled is when Octen last fetched the page; max_age_seconds=300 forces a
+    # refetch of any older copy. Allow 60 s for clock skew between here and the server.
+    margin = timedelta(seconds=60)
+    sent = datetime.now(timezone.utc)
+    fresh = OctenExtract(max_urls=1, max_age_seconds=300).invoke({"urls": [DOCS]})
+    received = datetime.now(timezone.utc)
+    _check("max_age_seconds=300", fresh)
+    (item,) = _items(fresh)
+    crawled = _ts(item.get("time_last_crawled"))
+    print(f"sent={sent.isoformat()} time_last_crawled={crawled}")
+    assert crawled is not None, item
+    assert sent - timedelta(seconds=300) - margin <= crawled <= received + margin, item
+    # Printed for the record: whether the default cache still serves an older copy.
+    control = OctenExtract(max_urls=1).invoke({"urls": [DOCS]})
+    _check("max_age control", control)
+    print(f"control time_last_crawled={_items(control)[0].get('time_last_crawled')}")
 
 
 def test_extract_cap_rejects_without_request() -> None:
