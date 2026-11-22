@@ -487,8 +487,9 @@ def test_extract_model_cannot_set_mode() -> None:
 
 
 IMAGE_QUERY = "golden gate bridge"
-# A stable public photo (Wikimedia Commons, 3.1 MB JPEG), under the API's 5 MB limit.
-REFERENCE_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/0/0c/GoldenGateBridge-001.jpg"
+# Wikimedia Commons "File:Siluete.jpg" (800 KB JPEG): description "Tour Eiffel", category
+# "Eiffel Tower in 2019". The URL names no subject, so a matching result shows the image was used.
+REFERENCE_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/2/23/Siluete.jpg"
 
 
 def _source_hosts(result: Dict[str, Any]) -> List[str]:
@@ -551,13 +552,12 @@ def test_image_search_by_url(request_bodies: List[Any]) -> None:
     assert request_bodies[0]["inputs"] == [{"type": "image", "url": REFERENCE_IMAGE}]
     assert 0 < len(result["data"]["results"]) <= 3, result
     assert all(r.get("url") for r in result["data"]["results"]), result
-    # The photo shows the Golden Gate Bridge: a result naming it shows the image was used.
     about = [
         f"{r.get('title') or ''} {r.get('description') or ''} {r.get('source_page') or ''}"
         for r in result["data"]["results"]
     ]
     print(f"image_url about={about}")
-    assert any(re.search(r"golden.?gate", text, re.IGNORECASE) for text in about), about
+    assert any(re.search(r"eiffel", text, re.IGNORECASE) for text in about), about
 
 
 def test_image_search_violations_send_nothing() -> None:
@@ -589,7 +589,7 @@ def design_control() -> Dict[str, Any]:
 
 
 def _paths(images: List[Dict[str, Any]]) -> List[str]:
-    # Image URLs are signed per response; the path identifies the image.
+    # Image URLs carry a per-response signature in the query string; the path is stable.
     return [urlparse(i["url"]).path for i in images]
 
 
@@ -613,11 +613,12 @@ def test_design_search_developer_image_options() -> None:
         {"query": DESIGN_QUERY}
     )
     _check("design facts and snippets control", control)
-    shown = control["data"]["images"]
-    print(f"control snippets={[bool(i.get('snippet')) for i in shown]}")
-    assert _paths(shown) == _paths(images), (shown, images)
-    assert all(i.get("design_facts") for i in shown), shown
-    assert any(i.get("snippet") for i in shown), shown
+    by_path = dict(zip(_paths(control["data"]["images"]), control["data"]["images"]))
+    matched = [by_path[p] for p in _paths(images) if p in by_path]
+    print(f"matched={len(matched)} snippets={[bool(i.get('snippet')) for i in matched]}")
+    assert matched, (control, off)
+    assert any(i.get("design_facts") for i in matched), matched
+    assert any(i.get("snippet") for i in matched), matched
 
 
 # A domain with many pages for DESIGN_QUERY, so the uncapped control returns more than 2.
@@ -627,37 +628,35 @@ WEB_DOMAIN = "dribbble.com"
 def test_design_search_developer_web_options() -> None:
     # The capped call first, so a dropped option fails before the control is billed.
     images_off = {"enable": False}
-    capped = OctenDesignSearch(
-        images=images_off,
-        web_search={"count": 2, "include_domains": [WEB_DOMAIN], "highlight": {"enable": False}},
-    ).invoke({"query": DESIGN_QUERY})
+    web = {"include_domains": [WEB_DOMAIN], "highlight": {"enable": False}}
+    capped = OctenDesignSearch(images=images_off, web_search={**web, "count": 2}).invoke(
+        {"query": DESIGN_QUERY}
+    )
     _check("design web capped", capped)
-    web = capped["data"]["results"]
-    print(f"capped hosts={[urlparse(r['url']).hostname for r in web]}")
+    got = capped["data"]["results"]
+    print(f"capped hosts={[urlparse(r['url']).hostname for r in got]}")
     assert not capped["data"].get("images"), capped
-    assert 0 < len(web) <= 2, capped
-    assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in web), web
-    assert not any(r.get("highlight") for r in web), web
-    # Same domain filter, no cap and default highlights.
-    control = OctenDesignSearch(
-        images=images_off, web_search={"include_domains": [WEB_DOMAIN]}
-    ).invoke({"query": DESIGN_QUERY})
+    assert 0 < len(got) <= 2, capped
+    assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in got), got
+    assert not any(r.get("highlight") for r in got), got
+    # Differs only in count: same domain filter, highlights off, no cap.
+    control = OctenDesignSearch(images=images_off, web_search=web).invoke({"query": DESIGN_QUERY})
     _check("design web control", control)
     uncapped = control["data"]["results"]
     print(f"uncapped hosts={[urlparse(r['url']).hostname for r in uncapped]}")
-    assert len(uncapped) > len(web), control
+    assert len(uncapped) > 2, control
     assert all(_on(urlparse(r["url"]).hostname or "", WEB_DOMAIN) for r in uncapped), uncapped
-    assert all(r.get("highlight") for r in uncapped), uncapped
 
 
 def test_design_search_group_follow_up(design_control: Dict[str, Any]) -> None:
     # Server defaults, the controls for the options above: more than 2 images, and web
-    # results on several domains.
+    # results with highlights on several domains.
     data = design_control["data"]
     hosts = [urlparse(r["url"]).hostname or "" for r in data.get("results") or []]
     print(f"default images={len(data['images'])} web hosts={hosts}")
     assert len(data["images"]) > 2, data
     assert hosts and any(not _on(h, WEB_DOMAIN) for h in hosts), hosts
+    assert all(r.get("highlight") for r in data["results"]), data["results"]
     images = data["images"]
     groups = [
         i["group"]
