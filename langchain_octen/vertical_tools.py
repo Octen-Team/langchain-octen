@@ -369,7 +369,18 @@ class _OctenVerticalTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
         **model_args: Any,
     ) -> Dict[str, Any]:
-        kwargs = self._request({"query": query, **model_args})
+        return self._call(self._request({"query": query, **model_args}))
+
+    async def _arun(
+        self,
+        query: str,
+        *,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+        **model_args: Any,
+    ) -> Dict[str, Any]:
+        return await self._acall(self._request({"query": query, **model_args}))
+
+    def _call(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         client: Any = sync_client(self._api_key())
         try:
             response = self._method(client)(**kwargs)
@@ -382,14 +393,7 @@ class _OctenVerticalTool(BaseTool):
             client.close()
         return self._result(response)
 
-    async def _arun(
-        self,
-        query: str,
-        *,
-        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-        **model_args: Any,
-    ) -> Dict[str, Any]:
-        kwargs = self._request({"query": query, **model_args})
+    async def _acall(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         client: Any = async_client(self._api_key())
         try:
             response = await self._method(client)(**kwargs)
