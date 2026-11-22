@@ -22,7 +22,7 @@ from octen import (
     OctenTimeoutError,
     OctenValidationError,
 )
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from langchain_octen import OctenDesignSearch, OctenImageSearch
 
@@ -1130,6 +1130,49 @@ def test_raised_error_for_image_url_drops_notes_and_extras(sync_client: MagicMoc
         assert "SECRET-TOKEN" not in text, text
     assert not hasattr(raised, "__notes__") and not hasattr(raised, "upstream_url")
     assert (raised.status_code, raised.request_id) == (403, "rid-403")
+
+
+@pytest.mark.parametrize(
+    "args",
+    # Short URLs: pydantic elides the middle of long input values, which would hide a
+    # token in the output even without the setting under test.
+    [{"query": "q", "image_url": "https://a.co/x?sig=SECRET-TOKEN"},
+     {"image_url": "http://a.co/x?sig=SECRET-TOKEN"},
+     {"image_url": "https://a.co/x?sig=SECRET-TOKEN", "count": 3}],
+    ids=["both-inputs", "http-url", "extra-arg"],
+)  # fmt: skip
+def test_raised_validation_error_hides_the_url(
+    args: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    with pytest.raises(ValidationError) as info:
+        _image(handle_validation_error=False).invoke(args)
+
+    assert "SECRET-TOKEN" not in str(info.value) and "SECRET-TOKEN" not in repr(info.value)
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("tool_kwargs", "args"),
+    [({}, {"query": "secret words " * 50, "group_id": "x"}),
+     ({}, {"group_id": "secret " * 30}),
+     ({"images": {"enable": False}}, {"query": "secret words", "group_id": "secret"})],
+    ids=["design-query-too-long", "design-group-too-long", "web-only-extra"],
+)  # fmt: skip
+def test_raised_design_validation_error_hides_input(
+    tool_kwargs: Dict[str, Any], args: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    with pytest.raises(ValidationError) as info:
+        _design(handle_validation_error=False, **tool_kwargs).invoke(args)
+
+    assert "secret" not in str(info.value) and "secret" not in repr(info.value)
+    sync_client.assert_not_called()
+
+
+def test_model_facing_validation_message_is_still_actionable(sync_client: MagicMock) -> None:
+    result = _image().invoke({"query": "q", "image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and "not both" in result and "SECRET-TOKEN" not in result
+    sync_client.assert_not_called()
 
 
 def test_raised_error_for_text_query_is_unchanged(sync_client: MagicMock) -> None:

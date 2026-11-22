@@ -197,7 +197,8 @@ class OctenImageSearchInput(BaseModel):
     """Model-facing arguments of Image Search."""
 
     # A misspelt argument must reach the model as an error, not run an unfiltered search.
-    model_config = ConfigDict(extra="forbid")
+    # Raised errors must not echo inputs: an image URL can carry a signed token.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     query: Optional[str] = Field(
         default=None,
@@ -413,7 +414,8 @@ class OctenDesignSearchInput(BaseModel):
     """Model-facing arguments of Design Search."""
 
     # A misspelt argument must reach the model as an error, not run an unfiltered search.
-    model_config = ConfigDict(extra="forbid")
+    # Raised errors must not echo inputs: an image URL can carry a signed token.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     query: Optional[str] = Field(
         default=None,
@@ -446,7 +448,8 @@ class OctenDesignSearchWebInput(BaseModel):
     """Model-facing arguments of Design Search when image results are turned off."""
 
     # A misspelt argument must reach the model as an error, not run an unfiltered search.
-    model_config = ConfigDict(extra="forbid")
+    # Raised errors must not echo inputs: an image URL can carry a signed token.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     query: str = Field(
         min_length=1,
