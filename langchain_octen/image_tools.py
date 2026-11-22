@@ -8,6 +8,7 @@ the developer. ``data`` is the response's data, unchanged.
 from __future__ import annotations
 
 import copy
+from contextvars import ContextVar
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
 
@@ -16,6 +17,7 @@ from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
+from langchain_core.tools import ToolException
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -26,11 +28,13 @@ from pydantic import (
 )
 from typing_extensions import Annotated, Literal, get_args
 
+from langchain_octen._client import classify
 from langchain_octen.vertical_tools import (
     _PLACEHOLDER_QUERY,
     Language,
     _is_rfc3339,
     _OctenVerticalTool,
+    logger,
 )
 
 # Limits from https://docs.octen.ai/api-reference/image-search.md
@@ -69,6 +73,15 @@ _NO_INPUT = (
     "of an image, to find visually similar images). No request was made."
 )
 _Domains = Optional[List[str]]
+# The model's image URL for the call in progress (None for a text query); a signed URL can
+# carry a token, so logs name only the input kind and messages replace the URL.
+_CURRENT_IMAGE_URL: ContextVar[Optional[str]] = ContextVar("_CURRENT_IMAGE_URL", default=None)
+
+
+def _not_blank(value: Optional[str]) -> Optional[str]:
+    if value is not None and not value.strip():
+        raise ValueError("must not be blank")
+    return value
 
 
 class OctenImageSearchInput(BaseModel):
@@ -102,11 +115,15 @@ class OctenImageSearchInput(BaseModel):
         description="Drop images whose source page is on these domains. Up to 10.",
     )
 
+    _check_query = field_validator("query", mode="after")(_not_blank)
+
     @field_validator("image_url", mode="after")
     @classmethod
     def _check_url(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
+        if any(ch.isspace() for ch in value):
+            raise ValueError("must be a URL without spaces or line breaks")
         try:
             parsed = urlparse(value)
             ok = parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
@@ -158,10 +175,18 @@ class OctenImageSearch(_OctenVerticalTool):
     _developer_options: ClassVar[Tuple[str, ...]] = ("count", "safesearch")
 
     def _model_error(self, exc: Exception) -> Optional[str]:
+        url = _CURRENT_IMAGE_URL.get()
         status = getattr(exc, "status_code", None)
         if isinstance(exc, octen.OctenAPIError) and status in _IMAGE_INPUT_HINTS:
-            return f"{exc}. {_IMAGE_INPUT_HINTS[status]}"
-        return super()._model_error(exc)
+            message: Optional[str] = f"{exc}. {_IMAGE_INPUT_HINTS[status]}"
+        else:
+            message = classify(exc)
+        if message is None:
+            kind = "image URL" if url else "text query"
+            request_id = getattr(exc, "request_id", None)
+            logger.error("%s (input: %s, request_id=%s)", type(exc).__name__, kind, request_id)
+            return None
+        return message.replace(url, "the image URL") if url else message
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         inputs = [{"type": "text", "data": _PLACEHOLDER_QUERY}]
@@ -178,7 +203,11 @@ class OctenImageSearch(_OctenVerticalTool):
     ) -> Dict[str, Any]:
         args = {"query": query, "image_url": image_url}
         domains = {"include_domains": include_domains, "exclude_domains": exclude_domains}
-        return self._call(self._request({**args, **domains}))
+        token = _CURRENT_IMAGE_URL.set(image_url)
+        try:
+            return self._call(self._request({**args, **domains}))
+        finally:
+            _CURRENT_IMAGE_URL.reset(token)
 
     async def _arun(  # type: ignore[override]
         self,
@@ -191,7 +220,11 @@ class OctenImageSearch(_OctenVerticalTool):
     ) -> Dict[str, Any]:
         args = {"query": query, "image_url": image_url}
         domains = {"include_domains": include_domains, "exclude_domains": exclude_domains}
-        return await self._acall(self._request({**args, **domains}))
+        token = _CURRENT_IMAGE_URL.set(image_url)
+        try:
+            return await self._acall(self._request({**args, **domains}))
+        finally:
+            _CURRENT_IMAGE_URL.reset(token)
 
 
 # --- Design Search -----------------------------------------------------------------------
@@ -215,6 +248,16 @@ _DESIGN_DESCRIPTION = (
 )
 # The API's default for images.count.
 _DESIGN_DEFAULT_IMAGES = 5
+# With images.enable false only the web results come back, so group_id is not offered.
+_DESIGN_WEB_ONLY_DESCRIPTION = (
+    "Search the web for pages about user interface and slide design, e.g. 'pricing "
+    "section for a SaaS landing page'. Returns ranked web results (title, url, highlight) "
+    "in `results`. Pass `query` (max 500 characters)."
+)
+_NEEDS_QUERY = (
+    "This tool returns no images, so group_id cannot be used on its own: pass `query`. "
+    "No request was made."
+)
 
 _NO_QUERY_OR_GROUP = (
     "Pass `query` to search for design references, or `group_id` (the group.group_id "
@@ -245,6 +288,8 @@ class OctenDesignSearchInput(BaseModel):
         description="The group.group_id of an earlier image result, to get the first "
         "images of that web page or deck in group order instead of searching.",
     )
+
+    _check_query = field_validator("query", mode="after")(_not_blank)
 
     @model_validator(mode="after")
     def _query_or_group(self) -> "OctenDesignSearchInput":
@@ -298,12 +343,23 @@ class OctenDesignSearch(_OctenVerticalTool):
         # Keep a private copy: later changes to the caller's dict must not leak in.
         return copy.deepcopy(value)
 
+    def _images_enabled(self) -> bool:
+        return (self.images or {}).get("enable") is not False
+
     @model_validator(mode="after")
     def _state_group_limit(self) -> "OctenDesignSearch":
         count = (self.images or {}).get("count")
-        if "description" not in self.model_fields_set and isinstance(count, int):
+        if "description" in self.model_fields_set:
+            return self
+        if not self._images_enabled():
+            self.description = _DESIGN_WEB_ONLY_DESCRIPTION
+        elif isinstance(count, int):
             self.description = _DESIGN_DESCRIPTION.format(limit=f"up to {count} images")
         return self
+
+    def _check_query(self, query: Optional[str]) -> None:
+        if query is None and not self._images_enabled():
+            raise ToolException(_NEEDS_QUERY)
 
     def _build_request_model(self, options: Dict[str, Any]) -> None:
         images, web = options["images"] or {}, options["web_search"] or {}
@@ -357,6 +413,7 @@ class OctenDesignSearch(_OctenVerticalTool):
         *,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Dict[str, Any]:
+        self._check_query(query)
         return self._call(self._request({"query": query, "group_id": group_id}))
 
     async def _arun(  # type: ignore[override]
@@ -366,4 +423,5 @@ class OctenDesignSearch(_OctenVerticalTool):
         *,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Dict[str, Any]:
+        self._check_query(query)
         return await self._acall(self._request({"query": query, "group_id": group_id}))

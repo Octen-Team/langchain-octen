@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import logging
 from typing import Any, Dict, List, Tuple, Type, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -319,6 +320,12 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         ({"image_url": "https://[example.com/x.jpg"}, "image_url"),
         ({"image_url": "https://example.com:abc/x.png"}, "image_url"),
         ({"image_url": "https://example.com:70000/x.png"}, "image_url"),
+        ({"image_url": "https://exa mple.com/photo.png"}, "image_url"),
+        ({"image_url": "https://example.com/a b.png"}, "image_url"),
+        ({"image_url": " https://example.com/a.png"}, "image_url"),
+        ({"image_url": "https://example.com/a.png\n"}, "image_url"),
+        ({"query": "   "}, "query"),
+        ({"query": "\t\n"}, "query"),
         ({"query": "q", "include_domains": [f"d{i}.com" for i in range(11)]}, "include_domains"),
         ({"query": "q", "exclude_domains": [f"d{i}.com" for i in range(11)]}, "exclude_domains"),
         ({"query": "q", "include_domains": "a.com"}, "include_domains"),
@@ -336,6 +343,12 @@ async def test_image_exactly_one_input_async(async_client: MagicMock) -> None:
         "url-unparseable",
         "url-port-not-numeric",
         "url-port-out-of-range",
+        "url-space-in-host",
+        "url-space-in-path",
+        "url-leading-space",
+        "url-trailing-newline",
+        "query-blank",
+        "query-whitespace",
         "include-11",
         "exclude-11",
         "domains-not-list",
@@ -479,6 +492,38 @@ def test_design_description_states_group_image_limit(images: Any, expected: str)
     assert "every image" not in description and "all images" not in description
 
 
+def test_design_without_images_offers_no_group_lookup() -> None:
+    description = _design(images={"enable": False}).description
+    assert "group_id" not in description and "group" not in description.lower()
+    assert "`query`" in description
+
+
+@pytest.mark.parametrize("images", [{"enable": False}, {"enable": False, "count": 3}], ids=repr)
+def test_design_without_images_rejects_group_only_call(
+    images: Dict[str, Any], sync_client: MagicMock
+) -> None:
+    result = _design(images=images).invoke({"group_id": GROUP_ID})
+
+    assert isinstance(result, str) and "pass `query`" in result, result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_design_without_images_rejects_group_only_call_async(
+    async_client: MagicMock,
+) -> None:
+    result = await _design(images={"enable": False}).ainvoke({"group_id": GROUP_ID})
+
+    assert isinstance(result, str) and "pass `query`" in result, result
+    async_client.assert_not_called()
+
+
+def test_design_without_images_still_searches(sync_client: MagicMock) -> None:
+    _design(images={"enable": False}).invoke({"query": "q"})
+
+    _des_search(sync_client).assert_called_once_with(query="q", images={"enable": False})
+
+
 def test_design_custom_description_kept() -> None:
     assert _design(images={"count": 3}, description="Find designs.").description == (
         "Find designs."
@@ -601,6 +646,79 @@ def test_design_forwarded_names_are_sdk_parameters() -> None:
 
 
 # --- Design Search: model input that never sends a request ------------------------------
+
+
+@pytest.mark.parametrize("args", [{"query": "  "}, {"query": " ", "group_id": GROUP_ID}], ids=repr)
+def test_design_blank_query_goes_to_model(args: Dict[str, Any], sync_client: MagicMock) -> None:
+    result = _design().invoke(args)
+
+    assert isinstance(result, str) and result.startswith("Invalid tool input"), result
+    assert "query" in result and "blank" in result
+    sync_client.assert_not_called()
+
+
+SIGNED_URL = "https://cdn.example.com/photo.jpg?sig=SECRET-TOKEN-123&se=2026"
+
+
+@pytest.mark.parametrize(
+    ("args", "kind", "hidden"),
+    [({"image_url": SIGNED_URL}, "image URL", "SECRET-TOKEN-123"),
+     ({"query": "private words"}, "text query", "private words")],
+    ids=["image-url", "text-query"],
+)  # fmt: skip
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OctenAuthenticationError(request_id="rid-401"),
+        OctenValidationError(f"image search request failed validation: input {SIGNED_URL}"),
+        OctenAPIError(
+            f"rejected {SIGNED_URL} private words", status_code=403, request_id="rid-403"
+        ),
+    ],
+    ids=["401", "sdk-validation", "403-echoing-input"],
+)
+def test_image_error_log_names_input_kind_not_input(
+    exc: Exception, args: Dict[str, Any], kind: str, hidden: str, sync_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:  # fmt: skip
+    _img_search(sync_client).side_effect = exc
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_octen"):
+        with pytest.raises(type(exc)):
+            _image().invoke(args)
+
+    assert hidden not in caplog.text and "sig=" not in caplog.text, caplog.text
+    assert kind in caplog.text and type(exc).__name__ in caplog.text, caplog.text
+    request_id = getattr(exc, "request_id", None)
+    if request_id:
+        assert request_id in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_image_error_log_hides_url_async(
+    async_client: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    _img_search(async_client).side_effect = OctenAuthenticationError(request_id="rid-401")
+
+    with caplog.at_level(logging.DEBUG, logger="langchain_octen"):
+        with pytest.raises(OctenAuthenticationError):
+            await _image().ainvoke({"image_url": SIGNED_URL})
+
+    assert "SECRET-TOKEN-123" not in caplog.text and "image URL" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [OctenAPIError(f"too large: {SIGNED_URL}", status_code=413),
+     OctenTimeoutError(timeout=30.0, request_sent=True)],
+    ids=["413", "timeout"],
+)  # fmt: skip
+def test_image_model_message_hides_url_query(exc: Exception, sync_client: MagicMock) -> None:
+    _img_search(sync_client).side_effect = exc
+
+    result = _image().invoke({"image_url": SIGNED_URL})
+
+    assert isinstance(result, str) and "SECRET-TOKEN-123" not in result, result
 
 
 @pytest.mark.parametrize("args", [{}, {"query": None}, {"group_id": None}], ids=repr)

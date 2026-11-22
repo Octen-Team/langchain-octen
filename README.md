@@ -357,7 +357,11 @@ same dict and splits errors the same way as the vertical search tools above.
   refused without a request and the model is told which to pass. The model can only pass an
   image by URL: base64 data and `data:` URIs are refused. To search with image bytes, call
   `octen.Octen().image_search.search(inputs=[{"type": "image", "data": ...}])` directly.
-  An `image_url` must have a host name, e.g. `https://:443/photo.png` is refused too.
+  An `image_url` must have a host name and a valid port and contain no whitespace, e.g.
+  `https://:443/photo.png` is refused too, and a blank `query` is refused.
+- **Image URLs stay out of logs.** A raised error is logged with its type, the input kind
+  (`image URL` or `text query`) and the request id, not the URL or query, since a signed
+  URL can carry a token; messages to the model replace the URL with "the image URL".
 - **A rejected image goes back to the model.** Unlike the other 4xx responses, 413 (image
   too large) and 415 (unsupported format) are returned to the model with a hint to try a
   smaller image, a supported format or another image URL. Authentication, access and
@@ -397,7 +401,9 @@ when they are returned. Web results on the same query come back alongside in
   `query` may then be omitted. It gets at most `images.count` of them (5, the API default,
   when unset), not necessarily the whole group, and the tool description states that limit.
   A call with neither is refused without a request. `group_id` is the model's:
-  `images={"group_id": ...}` raises `ValueError` at construction.
+  `images={"group_id": ...}` raises `ValueError` at construction. With
+  `images={"enable": False}` the description offers no group lookup and a `group_id`-only
+  call is refused, asking the model for a `query`.
 - **Large output by default.** Left unset, the server defaults apply: 5 images, each with
   `design_facts` and a `snippet` of up to 5000 tokens where the image has reusable code, plus
   5 web results with highlights. That can be a lot of text for a model. Turn off or shorten
