@@ -1086,6 +1086,18 @@ def test_design_model_cannot_set_developer_options(
             },
             "end_time",
         ),
+        # Near the ends of the calendar: the offset pushes the UTC instant out of range.
+        (
+            {
+                "web_search": {
+                    "start_time": "9999-12-31T23:00:00-01:00",
+                    "end_time": "0001-01-01T00:00:00+01:00",
+                }
+            },
+            "end_time",
+        ),
+        ({"web_search": {"highlight": {1: True, "enable": True}}}, "1"),
+        ({"web_search": {"full_content": {1: True, "x": 2, None: 3}}}, "None"),
         # Reversed by one nanosecond, below microsecond precision.
         (
             {
@@ -1138,6 +1150,18 @@ def test_design_invalid_developer_option_raises(
         {"web_search": {"count": 100}},
         {"web_search": {"language": ["ar", "zh"]}},
         {"images": IMAGES, "web_search": WEB},
+        {
+            "web_search": {
+                "start_time": "0001-01-01T00:00:00+01:00",
+                "end_time": "9999-12-31T23:00:00-01:00",
+            }
+        },
+        {
+            "web_search": {
+                "start_time": "0001-01-01T00:00:00+01:00",
+                "end_time": "0001-01-01T00:00:00Z",
+            }
+        },
         {
             "web_search": {
                 "start_time": "2025-01-01T08:00:00+08:00",

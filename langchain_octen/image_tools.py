@@ -11,7 +11,7 @@ import copy
 import ipaddress
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime
 from fractions import Fraction
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlparse
@@ -133,15 +133,21 @@ def _without_upstream_text(exc: Exception) -> Exception:
 _INSTANT = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)")
 
 
-def _instant(value: str) -> Tuple[datetime, Fraction]:
-    """The UTC second and exact fraction of an RFC 3339 time checked by ``_is_rfc3339``."""
+def _instant(value: str) -> Tuple[int, Fraction]:
+    """The UTC second and exact fraction of an RFC 3339 time checked by ``_is_rfc3339``.
+
+    Integer arithmetic, so an offset near year 1 or 9999 cannot overflow a datetime.
+    """
     match = _INSTANT.fullmatch(value)
     assert match is not None
     base, fraction, offset = match.groups()
-    # fromisoformat before 3.11 takes no Z; the fraction is kept apart at full precision.
-    moment = datetime.fromisoformat(base + ("+00:00" if offset == "Z" else offset))
+    local = datetime.fromisoformat(base)
+    seconds = local.toordinal() * 86400 + local.hour * 3600 + local.minute * 60 + local.second
+    if offset != "Z":
+        shift = int(offset[1:3]) * 3600 + int(offset[4:6]) * 60
+        seconds -= shift if offset[0] == "+" else -shift
     exact = Fraction(int(fraction), 10 ** len(fraction)) if fraction else Fraction(0)
-    return moment.astimezone(timezone.utc), exact
+    return seconds, exact
 
 
 def _not_blank(value: Optional[str]) -> Optional[str]:
@@ -492,7 +498,9 @@ class OctenDesignSearch(_OctenVerticalTool):
             )
         for key in ("highlight", "full_content"):
             nested = web.get(key)
-            unknown = sorted(set(nested) - _HIGHLIGHT_KEYS) if isinstance(nested, dict) else []
+            extra = set(nested) - _HIGHLIGHT_KEYS if isinstance(nested, dict) else set()
+            # repr first: keys of mixed or non-string types cannot be sorted or joined.
+            unknown = sorted(repr(k) for k in extra)
             if unknown:
                 raise ValueError(
                     f"invalid {self.name} option: web_search.{key}: unknown option "
