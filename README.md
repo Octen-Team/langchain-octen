@@ -127,7 +127,21 @@ tool = OctenSearchResults(
     full_content_max_tokens=1000,
 )
 results = tool.invoke({"query": "Python documentation"})
+
+# Return only relevant results, up to max_results
+tool = OctenSearchResults(max_results=5, result_type="dynamic")
+results = tool.invoke({"query": "Python 3.13 free-threaded build"})
 ```
+
+### Result type
+
+`result_type` is set by you when the tool is created and applies to every call; the model
+cannot see or change it. `"standard"` returns results as the options you set specify;
+`"dynamic"` returns only relevant results, up to `max_results`, and adjusts highlight length
+per result (with `"dynamic"`, `highlight_max_tokens` may be adjusted per result). Left
+unset, nothing is sent and the server default (`"standard"`) applies. Any other value is
+rejected when the tool is created. `OctenBroadSearch` and `OctenSearchPremier` take the same
+option.
 
 ## Vertical search tools
 
@@ -221,7 +235,12 @@ results grouped per sub-query (`data.queries`, `data.search_results`; not dedupl
 
 | Model arguments | Constructor options |
 |---|---|
-| `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (per sub-query, 1-100), `max_queries` (1-30), `highlight`, `full_content`, `timeout` |
+| `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (per sub-query, 1-100), `result_type` (`"standard"` or `"dynamic"`), `max_queries` (1-30), `highlight`, `full_content`, `timeout` |
+
+`result_type` applies to every sub-query. `"standard"` (the default) returns results as the
+options you set specify. With `"dynamic"` only relevant results come back, so `count` is a
+maximum (a sub-query can return fewer, possibly none), and Octen may adjust the highlight
+length per result: `highlight["max_tokens"]` is a cap.
 
 ```python
 tool = OctenBroadSearch(max_queries=5, count=3)

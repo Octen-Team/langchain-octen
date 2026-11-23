@@ -470,7 +470,12 @@ class OctenBroadSearch(_OctenVerticalTool):
     args_schema: Type[BaseModel] = OctenFilteredSearchInput
 
     count: Optional[int] = None
-    """Results per sub-query (1-100). Unset uses the server default."""
+    """Results per sub-query (1-100); the maximum when ``result_type`` is ``"dynamic"``.
+    Unset uses the server default."""
+    result_type: Optional[Literal["standard", "dynamic"]] = None
+    """``"dynamic"`` returns only relevant results, up to ``count``, and adjusts the
+    highlight length per result. Applies to every sub-query. Unset uses the server default
+    (``standard``)."""
     highlight: Optional[Dict[str, Any]] = None
     """Highlight options, e.g. ``{"enable": True, "max_tokens": 512}``."""
     full_content: Optional[Dict[str, Any]] = None
@@ -481,6 +486,7 @@ class OctenBroadSearch(_OctenVerticalTool):
     _sdk_method: ClassVar[Tuple[str, str]] = ("search", "broad_search")
     _developer_options: ClassVar[Tuple[str, ...]] = (
         "count",
+        "result_type",
         "highlight",
         "full_content",
         "max_queries",

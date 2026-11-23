@@ -317,3 +317,87 @@ def test_existing_tools_send_the_same_requests() -> None:
 @pytest.mark.asyncio
 async def test_existing_tools_send_the_same_requests_async() -> None:
     assert _serialize(await _capture_async()) == _serialize(EXPECTED)
+
+
+def _fake_request(seen: List[Call]) -> Any:
+    def fake(
+        self: Any,
+        method: str,
+        endpoint: str,
+        timeout: Any = None,
+        json: Any = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        seen.append((method, endpoint, json, timeout))
+        return dict(CANNED)
+
+    return fake
+
+
+def _post_body(tool: Any, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    seen: List[Call] = []
+    with patch("octen.core.http_client.HTTPClient.request", _fake_request(seen)):
+        tool.invoke(args)
+    assert len(seen) == 1, seen
+    return seen[0][1], seen[0][2]
+
+
+async def _post_body_async(tool: Any, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    seen: List[Call] = []
+
+    async def fake(self: Any, *a: Any, **kw: Any) -> Dict[str, Any]:
+        return _fake_request(seen)(self, *a, **kw)
+
+    with patch("octen.core.async_http_client.AsyncHTTPClient.request", fake):
+        await tool.ainvoke(args)
+    assert len(seen) == 1, seen
+    return seen[0][1], seen[0][2]
+
+
+# These two have no earlier release to capture from. The expected bodies come from the
+# OpenAPI field name and position: `result_type` at the top level of /search, and inside
+# `search_options` (not at the top level) of /broad-search.
+WEB_RESULT_TYPE_BODY = {"query": "q", "count": 3, "result_type": "dynamic"}
+BROAD_RESULT_TYPE_BODY = {
+    "query": "q",
+    "max_queries": 3,
+    "search_options": {"count": 2, "result_type": "dynamic"},
+}
+
+
+def _web_result_type_tool() -> OctenSearchResults:
+    return OctenSearchResults(octen_api_key=KEY, max_results=3, result_type="dynamic")
+
+
+def _broad_result_type_tool() -> OctenBroadSearch:
+    return OctenBroadSearch(octen_api_key=KEY, count=2, max_queries=3, result_type="dynamic")
+
+
+def test_web_search_sends_result_type_at_the_top_level() -> None:
+    endpoint, body = _post_body(_web_result_type_tool(), {"query": "q"})
+
+    assert endpoint == "/search"
+    assert body == WEB_RESULT_TYPE_BODY
+
+
+def test_broad_search_sends_result_type_inside_search_options_only() -> None:
+    endpoint, body = _post_body(_broad_result_type_tool(), {"query": "q"})
+
+    assert endpoint == "/broad-search"
+    assert body == BROAD_RESULT_TYPE_BODY
+
+
+@pytest.mark.asyncio
+async def test_web_search_sends_result_type_at_the_top_level_async() -> None:
+    endpoint, body = await _post_body_async(_web_result_type_tool(), {"query": "q"})
+
+    assert endpoint == "/search"
+    assert body == WEB_RESULT_TYPE_BODY
+
+
+@pytest.mark.asyncio
+async def test_broad_search_sends_result_type_inside_search_options_only_async() -> None:
+    endpoint, body = await _post_body_async(_broad_result_type_tool(), {"query": "q"})
+
+    assert endpoint == "/broad-search"
+    assert body == BROAD_RESULT_TYPE_BODY

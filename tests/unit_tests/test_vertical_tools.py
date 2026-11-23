@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Literal, Optional, Tuple, Type
@@ -68,8 +69,8 @@ CASES = [
         ("search", "broad_search"),
         octen.BroadSearchResponse,
         FILTER_ARGS,
-        {"count": 3, "highlight": {"enable": True}, "full_content": {"enable": False},
-         "max_queries": 4},
+        {"count": 3, "result_type": "dynamic", "highlight": {"enable": True},
+         "full_content": {"enable": False}, "max_queries": 4},
     ),
     Case(
         OctenNewsSearch,
@@ -457,6 +458,9 @@ async def test_async_transient_error_goes_to_model(case: Case, async_client: Mag
         (CASES[0], {"max_queries": 1000}, "max_queries"),
         (CASES[0], {"count": 1000}, "count"),
         (CASES[0], {"highlight": {"max_tokens": 5}}, "highlight"),
+        (CASES[0], {"result_type": "fast"}, "result_type"),
+        (CASES[0], {"result_type": ""}, "result_type"),
+        (CASES[0], {"result_type": "Dynamic"}, "result_type"),
         (CASES[1], {"count": 1000}, "count"),
         (CASES[1], {"subjects": {"count": 9}}, "subjects"),
         (CASES[2], {"entities": {"count": 1000}}, "entities"),
@@ -486,6 +490,9 @@ async def test_async_transient_error_goes_to_model(case: Case, async_client: Mag
         "broad-max_queries",
         "broad-count",
         "broad-highlight",
+        "broad-result_type",
+        "broad-result_type-empty",
+        "broad-result_type-case",
         "news-count",
         "news-subjects",
         "business-entities-count",
@@ -866,6 +873,76 @@ def test_response_format_other_than_content_rejected(case: Case, sync_client: Ma
 @pytest.mark.parametrize("case", CASES, ids=_ids)
 def test_response_format_content_accepted(case: Case) -> None:
     assert _tool(case, response_format="content").response_format == "content"
+
+
+BROAD = CASES[0]
+
+
+def test_broad_model_cannot_see_or_set_result_type(sync_client: MagicMock) -> None:
+    tool = _tool(BROAD, result_type="dynamic")
+    assert "result_type" not in tool.args
+    assert "result_type" not in json.dumps(tool.args_schema.model_json_schema())  # type: ignore[union-attr]
+
+    result = tool.invoke({"query": "x", "result_type": "standard"})
+
+    assert isinstance(result, str)
+    assert "result_type" in result
+    sync_client.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["standard", "dynamic"])
+def test_broad_sdk_receives_result_type_sync(value: str, sync_client: MagicMock) -> None:
+    client = sync_client.return_value
+    client.search.broad_search.return_value = _response(BROAD)
+
+    _tool(BROAD, count=3, result_type=value).invoke({"query": "q"})
+
+    client.search.broad_search.assert_called_once_with(query="q", count=3, result_type=value)
+
+
+@pytest.mark.asyncio
+async def test_broad_sdk_receives_result_type_async(async_client: MagicMock) -> None:
+    client = async_client.return_value
+    client.search.broad_search.return_value = _response(BROAD)
+
+    await _tool(BROAD, result_type="dynamic").ainvoke({"query": "q"})
+
+    client.search.broad_search.assert_called_once_with(query="q", result_type="dynamic")
+
+
+@pytest.mark.asyncio
+async def test_broad_sdk_call_has_no_result_type_when_unset_async(
+    async_client: MagicMock,
+) -> None:
+    client = async_client.return_value
+    client.search.broad_search.return_value = _response(BROAD)
+
+    await _tool(BROAD, count=2).ainvoke({"query": "q"})
+
+    client.search.broad_search.assert_called_once_with(query="q", count=2)
+
+
+def test_broad_dynamic_with_empty_groups_is_not_an_error(sync_client: MagicMock) -> None:
+    # dynamic: count is a maximum, so a sub-query can come back empty.
+    client = sync_client.return_value
+    client.search.broad_search.return_value = octen.BroadSearchResponse(
+        code=0,
+        msg="success",
+        data={"queries": ["a"], "search_results": [{"query": "a", "results": []}]},
+        meta={},
+        request_id="rid",
+    )
+
+    result = _tool(BROAD, result_type="dynamic").invoke({"query": "q"})
+
+    assert result["data"]["search_results"][0]["results"] == []
+
+
+@pytest.mark.parametrize("case", [CASES[1], CASES[2], CASES[3], PLACE], ids=_ids)
+def test_result_type_is_not_a_news_business_pulse_or_place_option(case: Case) -> None:
+    # Out of scope for this release: the option must be rejected, not silently dropped.
+    with pytest.raises(ValueError, match="result_type"):
+        _tool(case, result_type="dynamic")
 
 
 PREMIER_DEVELOPER_ONLY = [

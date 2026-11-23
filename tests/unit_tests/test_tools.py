@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
+import json
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.tools import ToolException
+from octen.resources.search import SearchResource
 from pydantic import SecretStr
 
 from langchain_octen import OctenSearchResults
@@ -344,6 +347,123 @@ class TestOctenSearchResults:
         await tool._arun(
             "test", include_domains=["example.com"], exclude_domains=["bad.com"]
         )
+
+
+# ---------------------------------------------------------------------------
+# result_type (developer option; the model cannot see or set it)
+# ---------------------------------------------------------------------------
+
+
+class TestResultType:
+    def test_wrapper_forwards_result_type(self) -> None:
+        wrapper = OctenSearchAPIWrapper(
+            octen_api_key=SecretStr(FAKE_API_KEY), result_type="dynamic"
+        )
+        assert wrapper._build_search_kwargs("q")["result_type"] == "dynamic"
+
+    def test_wrapper_omits_unset_result_type(self) -> None:
+        wrapper = OctenSearchAPIWrapper(octen_api_key=SecretStr(FAKE_API_KEY))
+        assert "result_type" not in wrapper._build_search_kwargs("q")
+
+    @pytest.mark.parametrize("value", ["standard", "dynamic"])
+    def test_tool_forwards_result_type_to_wrapper(self, value: str) -> None:
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), result_type=value)
+        assert tool.api_wrapper.result_type == value
+
+    @patch("octen.Octen")
+    def test_sdk_receives_result_type_sync(self, mock_octen_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), result_type="dynamic").invoke(
+            {"query": "q"}
+        )
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert call_kwargs["result_type"] == "dynamic"
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_sdk_receives_result_type_async(self, mock_async_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), result_type="dynamic")
+        await tool.ainvoke({"query": "q"})
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert call_kwargs["result_type"] == "dynamic"
+
+    @patch("octen.Octen")
+    def test_sdk_call_has_no_result_type_when_unset_sync(self, mock_octen_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY)).invoke({"query": "q"})
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert "result_type" not in call_kwargs
+
+    @pytest.mark.asyncio
+    @patch("octen.AsyncOcten")
+    async def test_sdk_call_has_no_result_type_when_unset_async(
+        self, mock_async_cls: MagicMock
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_async_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS)
+
+        await OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY)).ainvoke({"query": "q"})
+
+        _, call_kwargs = mock_client.search.search.call_args
+        assert "result_type" not in call_kwargs
+
+    @pytest.mark.parametrize("cls", [OctenSearchResults, OctenSearchAPIWrapper])
+    @pytest.mark.parametrize("value", ["fast", "", "Dynamic", " dynamic"])
+    def test_invalid_result_type_rejected_at_construction(self, cls: Any, value: str) -> None:
+        with pytest.raises(ValueError, match="result_type"):
+            cls(octen_api_key=SecretStr(FAKE_API_KEY), result_type=value)
+
+    def test_model_cannot_see_result_type(self) -> None:
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), result_type="dynamic")
+        assert "result_type" not in tool.args
+        assert "result_type" not in json.dumps(tool.args_schema.model_json_schema())  # type: ignore[union-attr]
+
+    @patch("octen.Octen")
+    def test_dynamic_with_no_results_takes_the_no_results_path(
+        self, mock_octen_cls: MagicMock
+    ) -> None:
+        # dynamic: count is a maximum, so an empty list is a valid answer, not a failure.
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response([])
+
+        tool = OctenSearchResults(octen_api_key=SecretStr(FAKE_API_KEY), result_type="dynamic")
+        with pytest.raises(ToolException, match="No results found"):
+            tool._run("q")
+        assert tool.invoke({"query": "q"}).startswith("No results found")
+
+    @patch("octen.Octen")
+    def test_dynamic_with_one_result_is_returned_as_is(self, mock_octen_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_octen_cls.return_value = mock_client
+        mock_client.search.search.return_value = _make_search_response(SAMPLE_RESULTS[:1])
+
+        tool = OctenSearchResults(
+            octen_api_key=SecretStr(FAKE_API_KEY), max_results=5, result_type="dynamic"
+        )
+        results = tool.invoke({"query": "q"})
+
+        assert [r["url"] for r in results] == ["https://python.org"]
+
+    @pytest.mark.parametrize("method", ["search", "broad_search"])
+    def test_installed_sdk_accepts_result_type(self, method: str) -> None:
+        # No mock: a SDK older than the dependency floor fails here, not on the first call.
+        parameters = inspect.signature(getattr(SearchResource, method)).parameters
+        assert "result_type" in parameters
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, SecretStr, model_validator
 
@@ -37,6 +37,7 @@ class OctenSearchAPIWrapper(BaseModel):
     highlight_max_tokens: Optional[int] = None
     format: Optional[str] = None
     safesearch: Optional[str] = None
+    result_type: Optional[Literal["standard", "dynamic"]] = None
     full_content_enabled: Optional[bool] = None
     full_content_max_tokens: Optional[int] = None
     timeout: Optional[float] = None
@@ -93,6 +94,8 @@ class OctenSearchAPIWrapper(BaseModel):
             kwargs["format"] = self.format
         if self.safesearch is not None:
             kwargs["safesearch"] = self.safesearch
+        if self.result_type is not None:
+            kwargs["result_type"] = self.result_type
         if self.timeout is not None:
             kwargs["timeout"] = self.timeout
 
