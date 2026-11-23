@@ -358,6 +358,15 @@ class _OctenVerticalTool(BaseTool):
             result["warning"] = warning
         return result
 
+    def _model_error(self, exc: Exception) -> Optional[str]:
+        """Return the message for the model, or ``None`` if ``exc`` must be raised."""
+        return _route(exc)
+
+    def _failure(self, exc: Exception) -> Tuple[Optional[Exception], bool]:
+        """Return what to raise for ``exc`` (``None``: re-raise it) and whether to chain it."""
+        message = self._model_error(exc)
+        return (None if message is None else ToolException(message)), True
+
     def _method(self, client: Any) -> Any:
         resource, method = self._sdk_method
         return getattr(getattr(client, resource), method)
@@ -382,28 +391,39 @@ class _OctenVerticalTool(BaseTool):
 
     def _call(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         client: Any = sync_client(self._api_key())
+        unchained: Optional[Exception] = None
         try:
             response = self._method(client)(**kwargs)
         except Exception as exc:
-            message = _route(exc)
-            if message is None:
+            failure, chained = self._failure(exc)
+            if failure is None:
                 raise
-            raise ToolException(message) from exc
+            if chained:
+                raise failure from exc
+            unchained = failure
         finally:
             client.close()
+        if unchained is not None:
+            # Raised outside the except block, so the original is not even the context.
+            raise unchained
         return self._result(response)
 
     async def _acall(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         client: Any = async_client(self._api_key())
+        unchained: Optional[Exception] = None
         try:
             response = await self._method(client)(**kwargs)
         except Exception as exc:
-            message = _route(exc)
-            if message is None:
+            failure, chained = self._failure(exc)
+            if failure is None:
                 raise
-            raise ToolException(message) from exc
+            if chained:
+                raise failure from exc
+            unchained = failure
         finally:
             await client.close()
+        if unchained is not None:
+            raise unchained
         return self._result(response)
 
 

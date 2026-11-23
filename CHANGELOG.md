@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- `OctenImageSearch` (`octen_image_search`): Image Search, images on the web found by a text
+  description or by a reference image.
+  - The model passes exactly one of `query` (max 500 characters) or `image_url` (a public
+    https URL with a domain name), plus `include_domains` / `exclude_domains` (up to 10 each, matched against
+    each result's source page). A call with both inputs or neither is refused without a
+    request, and the model is told which to pass. Base64 images are not accepted from the
+    model; call `octen` directly for those. An `image_url` must be an https URL with a
+    domain name (the API refuses `http` and IP-address hosts), a valid port and no ASCII
+    spaces or control characters; a blank `query` is refused.
+    Raised errors are logged with the input kind and request id, never the image URL or
+    query. Errors for an `image_url` call reach the model as a fixed message without
+    upstream text. Octen errors raised to the developer keep their class, status and
+    request id but drop the upstream message, body and cause; any other exception is raised
+    as a plain `octen.OctenError` with the request id when known.
+  - 413 (image too large) and 415 (unsupported format) are returned to the model with a hint
+    to try another image, instead of being raised like other 4xx responses.
+  - `count` (1-10) and `safesearch` (`"off"` or `"strict"`) and `timeout` are constructor
+    options, checked when the tool is built.
+- `OctenDesignSearch` (`octen_design_search`): Design Search, design references (web pages,
+  page sections, app screens and slides) with their design values, plus web results on the
+  same query.
+  - The model passes `query` (max 500 characters), `group_id` or both. `group_id` is the
+    `group.group_id` of an earlier image result (at most 127 characters) and returns the first images of that page
+    or deck in group order instead of a search, at most `images.count` (5 by default); the
+    tool description states the limit. A call with neither is refused without a request.
+    With `images={"enable": False}` the input schema has only a required `query`, the
+    description offers no group lookup and `group_id` is never forwarded.
+  - `images` (`enable`, `count`, `design_facts`, `snippet`) and `web_search` (`enable`,
+    `count`, `highlight`, `full_content`, domain, language and time filters) and `timeout`
+    are constructor options, checked when the tool is built: `images.group_id` is refused
+    (it is the model's), `highlight` and `full_content` accept only the `enable` and
+    `max_tokens` keys, `language` must be one of the documented ISO 639-1 codes and
+    `start_time` / `end_time` must be RFC 3339 times with the end not before the start, and
+    turning off both images and web results is refused. Left unset, the server defaults apply,
+    so each image carries `design_facts` and a snippet of up to 5000 tokens (large output);
+    `images={"design_facts": False, "snippet": {"enable": False}}` turns them off and
+    `images={"snippet": {"max_tokens": ...}}` shortens the snippets.
+- Both tools return `{"data", "request_id", "warning"}` with the response's data unchanged,
+  and split errors like the other vertical tools.
+
+The existing tools are unchanged: same parameters, same requests, same return shape. The
+new tools are separate classes; nothing is added to an agent unless you pass them in.
+`octen>=0.13.0,<1.0.0` already provides both endpoints, so the dependency range is unchanged.
+
 ## 0.3.0
 
 ### Added

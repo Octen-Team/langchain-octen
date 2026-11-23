@@ -1,6 +1,7 @@
 """LangChain integration for Octen Web Search."""
 
 from langchain_octen.extract import OctenExtract
+from langchain_octen.image_tools import OctenDesignSearch, OctenImageSearch
 from langchain_octen.tools import OctenSearchResults
 from langchain_octen.vertical_tools import (
     OctenBroadSearch,
@@ -11,11 +12,13 @@ from langchain_octen.vertical_tools import (
     OctenSearchPremier,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "OctenBroadSearch",
     "OctenBusinessSearch",
+    "OctenDesignSearch",
     "OctenExtract",
+    "OctenImageSearch",
     "OctenNewsSearch",
     "OctenPlaceSearch",
     "OctenPulseSearch",

@@ -14,7 +14,9 @@ from langchain_tests.unit_tests import ToolsUnitTests  # noqa: E402
 from langchain_octen import (  # noqa: E402
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenDesignSearch,
     OctenExtract,
+    OctenImageSearch,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
@@ -121,3 +123,23 @@ class TestOctenExtractStandard(_OctenVerticalStandardTests):
     @property
     def tool_invoke_params_example(self) -> Dict[str, Any]:
         return {"urls": ["https://example.com/"], "query": "domain"}
+
+
+class TestOctenImageSearchStandard(_OctenVerticalStandardTests):
+    @property
+    def tool_constructor(self) -> Type[BaseTool]:
+        return OctenImageSearch
+
+    @property
+    def tool_invoke_params_example(self) -> Dict[str, Any]:
+        return {"query": "golden gate bridge at night", "include_domains": ["wikipedia.org"]}
+
+
+class TestOctenDesignSearchStandard(_OctenVerticalStandardTests):
+    @property
+    def tool_constructor(self) -> Type[BaseTool]:
+        return OctenDesignSearch
+
+    @property
+    def tool_invoke_params_example(self) -> Dict[str, Any]:
+        return {"query": "pricing section for a SaaS landing page"}

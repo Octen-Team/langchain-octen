@@ -6,7 +6,8 @@ runs the same inputs with octen 0.13.0. A difference means a 0.2.0 tool now send
 different request, whether from this package or from the octen upgrade.
 
 The octen_search_premier entry was captured the same way on this branch at b3cc8ad,
-with octen 0.13.0, before the Extract tool was added.
+with octen 0.13.0, before the Extract tool was added. The octen_extract entry was captured
+on langchain-octen 0.3.0 (origin/main e63a5f6) with octen 0.13.0.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from pydantic import SecretStr
 from langchain_octen import (
     OctenBroadSearch,
     OctenBusinessSearch,
+    OctenExtract,
     OctenNewsSearch,
     OctenPlaceSearch,
     OctenPulseSearch,
@@ -115,6 +117,22 @@ def _tools() -> List[Tuple[Any, Dict[str, Any]]]:
                 timeout=9.0,
             ),
             {"query": "q", "include_domains": ["a.com"], "exclude_domains": ["b.com"]},
+        ),
+        (
+            OctenExtract(
+                octen_api_key=KEY,
+                max_urls=3,
+                mode="advanced",
+                format="text",
+                max_age_seconds=600,
+                url_timeout=45,
+                include_images=True,
+                include_videos=True,
+                include_audio=True,
+                include_links={"scope": "prefer_external", "max_links": 10},
+                timeout=100.0,
+            ),
+            {"urls": ["https://example.com/", "https://docs.octen.ai/"], "query": "q"},
         ),
     ]
 
@@ -219,6 +237,24 @@ EXPECTED: Dict[str, Call] = {
             "include_images": True,
         },
         9.0,
+    ),
+    # Captured on 0.3.0 (e63a5f6) with octen 0.13.0; see the module docstring.
+    "octen_extract": (
+        "POST",
+        "/extract",
+        {
+            "urls": ["https://example.com/", "https://docs.octen.ai/"],
+            "format": "text",
+            "max_age_seconds": 600,
+            "query": "q",
+            "timeout": 45,
+            "include_images": True,
+            "include_videos": True,
+            "include_audio": True,
+            "mode": "advanced",
+            "include_links": {"scope": "prefer_external", "max_links": 10},
+        },
+        100.0,
     ),
 }
 
