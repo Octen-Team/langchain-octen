@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1
+
+### Added
+
+- `result_type` (`"standard"` or `"dynamic"`) on `OctenSearchResults` and
+  `OctenBroadSearch`, as it already was on `OctenSearchPremier`. It is a constructor
+  option: you set it when the tool is created and it applies to every call. The model's
+  arguments are unchanged and it cannot see or set it. `"dynamic"` returns only relevant
+  results, up to the result count, and adjusts highlight length per result; on
+  `OctenBroadSearch` it applies to every sub-query. Any other value is refused when the
+  tool is built.
+- `OctenSearchAPIWrapper` takes the same `result_type` field.
+
+Left unset, nothing is sent and every request is unchanged.
+
+### Changed
+
+- Requires `octen>=0.13.1,<1.0.0`: `result_type` on `search()` and `broad_search()` first
+  shipped in 0.13.1.
+
 ## 0.4.0
 
 ### Added
