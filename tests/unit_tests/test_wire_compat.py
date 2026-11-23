@@ -317,3 +317,48 @@ def test_existing_tools_send_the_same_requests() -> None:
 @pytest.mark.asyncio
 async def test_existing_tools_send_the_same_requests_async() -> None:
     assert _serialize(await _capture_async()) == _serialize(EXPECTED)
+
+
+def _post_body(tool: Any, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    seen: List[Call] = []
+
+    def fake(
+        self: Any,
+        method: str,
+        endpoint: str,
+        timeout: Any = None,
+        json: Any = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        seen.append((method, endpoint, json, timeout))
+        return dict(CANNED)
+
+    with patch("octen.core.http_client.HTTPClient.request", fake):
+        tool.invoke(args)
+    assert len(seen) == 1, seen
+    return seen[0][1], seen[0][2]
+
+
+# These two have no earlier release to capture from. The expected bodies come from the
+# OpenAPI field name and position: `result_type` at the top level of /search, and inside
+# `search_options` (not at the top level) of /broad-search.
+def test_web_search_sends_result_type_at_the_top_level() -> None:
+    tool = OctenSearchResults(octen_api_key=KEY, max_results=3, result_type="dynamic")
+
+    endpoint, body = _post_body(tool, {"query": "q"})
+
+    assert endpoint == "/search"
+    assert body == {"query": "q", "count": 3, "result_type": "dynamic"}
+
+
+def test_broad_search_sends_result_type_inside_search_options_only() -> None:
+    tool = OctenBroadSearch(octen_api_key=KEY, count=2, max_queries=3, result_type="dynamic")
+
+    endpoint, body = _post_body(tool, {"query": "q"})
+
+    assert endpoint == "/broad-search"
+    assert body == {
+        "query": "q",
+        "max_queries": 3,
+        "search_options": {"count": 2, "result_type": "dynamic"},
+    }

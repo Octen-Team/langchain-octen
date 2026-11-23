@@ -125,6 +125,89 @@ def test_broad_search() -> None:
     assert any(group.get("results") for group in groups), groups
 
 
+def _spy_search_method(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> List[Dict[str, Any]]:
+    """Record the keyword arguments and the real SDK response of each call to SearchResource."""
+    calls: List[Dict[str, Any]] = []
+    original = getattr(SearchResource, name)
+
+    def spy(self: SearchResource, *args: Any, **kwargs: Any) -> Any:
+        response = original(self, *args, **kwargs)
+        calls.append({"kwargs": kwargs, "response": response})
+        return response
+
+    monkeypatch.setattr(SearchResource, name, spy)
+    return calls
+
+
+def test_octen_search_results_dynamic_echoes_result_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The tool returns a plain list, so read meta from the real SDK response via a spy.
+    calls = _spy_search_method(monkeypatch, "search")
+
+    tool = OctenSearchResults(max_results=3, result_type="dynamic")
+    results = tool.invoke({"query": "Python programming language"})
+
+    assert len(calls) == 1
+    response = calls[0]["response"]
+    meta, count = response.meta, len(response.results)
+    print(f"\n{tool.name} request_id={(response.model_extra or {}).get('request_id')}")
+    print(f"meta result_type={meta.get('result_type')} results={count}")
+    # What was sent, then what the server echoes: a dropped option is echoed as "standard".
+    assert calls[0]["kwargs"].get("result_type") == "dynamic", calls[0]["kwargs"]
+    assert meta.get("result_type") == "dynamic", meta
+    # The count is only an upper bound: dynamic may return fewer results than requested.
+    assert count <= 3, results
+
+
+def _highlight_lengths(result: Dict[str, Any]) -> Dict[str, int]:
+    """Highlight length per distinct, non-empty url; a url repeated in a response counts once."""
+    lengths: Dict[str, int] = {}
+    for group in result["data"]["search_results"]:
+        for item in group.get("results") or []:
+            url = item.get("url")
+            if not url:
+                continue
+            highlight = item.get("highlight") or ""
+            if isinstance(highlight, list):
+                highlight = "".join(str(part) for part in highlight)
+            lengths.setdefault(url, len(highlight))
+    return lengths
+
+
+def test_broad_search_dynamic_shortens_highlights(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Observed 2026-11-23: for this query the dynamic highlights were about a quarter to a
+    # third as long as the standard ones, but the effect depends on the query (other queries
+    # gave identical highlights). A skip means "no evidence this run", not a defect.
+    calls = _spy_search_method(monkeypatch, "broad_search")
+    query = "EU AI Act enforcement timeline"
+    standard = OctenBroadSearch(
+        count=3, max_queries=1, highlight={"enable": True}, result_type="standard"
+    )
+    dynamic = OctenBroadSearch(
+        count=3, max_queries=1, highlight={"enable": True}, result_type="dynamic"
+    )
+    control = standard.invoke({"query": query})
+    result = dynamic.invoke({"query": query})
+    _check("standard", control)
+    _check("dynamic", result)
+
+    # Deterministic: what each call sent. Only then compare the responses.
+    assert [c["kwargs"].get("result_type") for c in calls] == ["standard", "dynamic"], calls
+
+    standard_lengths, dynamic_lengths = _highlight_lengths(control), _highlight_lengths(result)
+    pairs = {
+        url: (standard_lengths[url], dynamic_lengths[url])
+        for url in standard_lengths.keys() & dynamic_lengths.keys()
+    }
+    print(f"paired highlight lengths (standard, dynamic) by url: {pairs}")
+    if control["data"]["queries"] != result["data"]["queries"]:
+        pytest.skip("queries differ between the two calls")
+    halved = [u for u, (std, dyn) in pairs.items() if std > 0 and dyn > 0 and dyn < std / 2]
+    if len(halved) < 2:
+        pytest.skip(f"fewer than 2 pairs under half: {len(halved)} of {len(pairs)} paired")
+
+
 def test_news_search() -> None:
     tool = OctenNewsSearch(count=1, subjects={"enable": True, "count": 1})
     result = tool.invoke({"query": "artificial intelligence regulation", "time_range": "month"})

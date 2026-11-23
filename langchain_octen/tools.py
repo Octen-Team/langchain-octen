@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Type
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
@@ -93,6 +93,7 @@ class OctenSearchResults(BaseTool):
     highlight_max_tokens: Optional[int] = None
     format: Optional[str] = None
     safesearch: Optional[str] = None
+    result_type: Optional[Literal["standard", "dynamic"]] = None
     full_content_enabled: Optional[bool] = None
     full_content_max_tokens: Optional[int] = None
     timeout: Optional[float] = None
@@ -118,6 +119,7 @@ class OctenSearchResults(BaseTool):
             "highlight_max_tokens",
             "format",
             "safesearch",
+            "result_type",
             "full_content_enabled",
             "full_content_max_tokens",
             "timeout",
