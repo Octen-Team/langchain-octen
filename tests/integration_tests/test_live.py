@@ -201,8 +201,9 @@ def test_broad_search_dynamic_shortens_highlights(monkeypatch: pytest.MonkeyPatc
         for url in standard_lengths.keys() & dynamic_lengths.keys()
     }
     print(f"paired highlight lengths (standard, dynamic) by url: {pairs}")
-    if control["data"]["queries"] != result["data"]["queries"]:
-        pytest.skip("queries differ between the two calls")
+    queries = control["data"].get("queries")
+    if not queries or queries != result["data"].get("queries"):
+        pytest.skip(f"queries missing or differ between the two calls: {queries!r}")
     halved = [u for u, (std, dyn) in pairs.items() if std > 0 and dyn > 0 and dyn < std / 2]
     if len(halved) < 2:
         pytest.skip(f"fewer than 2 pairs under half: {len(halved)} of {len(pairs)} paired")

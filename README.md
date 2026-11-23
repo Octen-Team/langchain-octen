@@ -237,9 +237,10 @@ results grouped per sub-query (`data.queries`, `data.search_results`; not dedupl
 |---|---|
 | `query`, `include_domains`, `exclude_domains`, `time_range`, `language` | `count` (per sub-query, 1-100), `result_type` (`"standard"` or `"dynamic"`), `max_queries` (1-30), `highlight`, `full_content`, `timeout` |
 
-`result_type` applies to every sub-query: `"dynamic"` returns only relevant results, up to
-`count`, and adjusts highlight length per result, so a sub-query can return fewer than
-`count` results. With `"standard"`, `count` and the `highlight` cap are used as you set them.
+`result_type` applies to every sub-query. `"standard"` (the default) returns results as the
+options you set specify. With `"dynamic"` only relevant results come back, so `count` is a
+maximum (a sub-query can return fewer, possibly none), and Octen may adjust the highlight
+length per result: `highlight["max_tokens"]` is a cap.
 
 ```python
 tool = OctenBroadSearch(max_queries=5, count=3)
